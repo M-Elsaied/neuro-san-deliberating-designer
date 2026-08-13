@@ -369,6 +369,115 @@ Use `ns <command> --help` for the full flag list of any subcommand.
 
 ---
 
+## Deliberating Agent Network Designer — how to test it
+
+This branch changes `agent_network_designer` so that it **gathers requirements before it builds**, and
+grounds what it builds in curated domain knowledge held as documents on disk.
+
+Start the server, open the UI, and select **`agent_network_designer`**:
+
+```bash
+ns run
+```
+
+### What changed
+
+- **It deliberates first.** The designer looks up curated knowledge for the domain you asked about, then
+  interviews you one question at a time, waiting for each answer. It will not build until you approve.
+- **Knowledge lives in documents, not in the prompt.** Each domain is a folder of `.md` files under
+  `coded_tools/agent_network_designer/knowdocs/<domain>/`, read by the `ExtractDocs` coded tool — the same
+  pattern `airline_policy` uses for its policy knowdocs. Documents are returned whole and verbatim, so an
+  operating standard reaches the designed agents word for word, with its id intact.
+- **It ends with a design brief** separating what you confirmed from what it assumed, and builds only on
+  `APPROVED`.
+- **Standards stay traceable.** Every operating standard is embedded in the agent that owns it as
+  `MUST: <standard text> [<id>]`, and the closing summary maps each id to its owning agent.
+
+Curated domains shipped in this branch:
+
+| Domain | `app_name` | Standard ids |
+|---|---|---|
+| Oracle database patching | `oracle_database_patching` | `ODB-01`…`ODB-06` |
+| Kubernetes cluster upgrade | `kubernetes_cluster_upgrade` | `K8S-01`…`K8S-06` |
+| Clinical trial database lock | `clinical_trial_database_lock` | `DBL-01`…`DBL-06` |
+
+### Scenario 1 — a curated domain (Oracle)
+
+Send each line as a separate turn and wait for the reply:
+
+| You send | What should happen |
+|---|---|
+| `Build me an agent network for Oracle db patching` | Names the domain it matched, calls `ExtractDocs`, then asks **one** question (topology) with example answers |
+| `Two-node RAC in prod with a Data Guard standby; dev and QA single instance.` | Asks the next question only |
+| `Skip the questions, just build it.` | **Refuses**, names the few questions still open and what would go wrong if it guessed |
+| `About 40 databases. DEV, then QA, then PROD. Four-hour Saturday window, PROD rolling with no full outage.` | Carries all of it forward, asks the next open variable |
+| `DBA team takes the RMAN backup, verified restore point required. Production gated by a ServiceNow CR approved by CAB` | Asks the remaining variables |
+| `opatch rollback, and the DBA team signs off connectivity.` | Presents the **design brief** |
+| `APPROVED` | Builds the network and prints the standards-coverage table |
+
+In the brief, check that: confirmed requirements contain only what you actually said; assumptions are
+listed separately; the standards are quoted verbatim with `ODB-0x` ids; and the proposed shape names real
+agents.
+
+### Scenario 2 — a different curated domain (Kubernetes)
+
+`Build me an agent network to upgrade our Kubernetes clusters`, then answer along the lines of:
+
+- `AKS, three clusters: dev, staging, prod.`
+- `1.29 to 1.31.` — it should treat this as two sequential minor upgrades, because `K8S-01` forbids skipping
+- `Surge upgrade, we have spare capacity.`
+- `Yes, stateful workloads with PVCs and strict PDBs on the payment service.`
+- `assume sensible defaults` — a blanket instruction ends the interview and goes straight to the brief
+- `APPROVED`
+
+It should ask about node strategy and PodDisruptionBudgets — never about RMAN — and the brief should carry
+`K8S-0x` ids. This is the check that the designer is driven by the documents rather than by one hardcoded
+domain.
+
+### Scenario 3 — a non-IT domain (clinical database lock)
+
+`Build me an agent network for our clinical trial database lock process`, then:
+
+- `Phase III, 120 sites, 900 subjects, double-blind.`
+- `Medidata Rave with Argus for safety.`
+- `Risk-based SDV on critical variables.`
+- `assume sensible defaults`
+- `APPROVED`
+
+Expect questions about the SDV model, coding dictionaries and who authorises the lock, and `DBL-0x` ids in
+the brief.
+
+### Scenario 4 — a domain with no curated knowledge
+
+`Build me an agent network for pizza delivery`
+
+It must say it has **no curated knowledge** for that domain, name the domains it does have, state that its
+standards are unverified — and then still interview you. Inventing confident "pizza standards" would be a
+failure: the designer should only assert what the knowledge documents gave it.
+
+### Check the generated network, not just the chat
+
+```bash
+ls registries/generated/
+grep -c "MUST:" registries/generated/<name>.hocon
+grep -oE "(ODB|K8S|DBL)-0[1-6]" registries/generated/<name>.hocon | sort -u
+```
+
+Each standard should appear inside the agent that owns it, verbatim, with its id — the backup gate carrying
+the backup standard, the validation agent carrying the validation standard, and so on.
+
+### Adding a domain
+
+1. Create `coded_tools/agent_network_designer/knowdocs/<your_domain>/` with `operating_standards.md` and
+   `open_variables.md` (copy an existing pair for the shape).
+2. Add one line to `docs_path` in `coded_tools/agent_network_designer/extract_docs.py`.
+3. Add the domain to the `ExtractDocs` description in `registries/agent_network_designer.hocon` so the
+   designer knows it can be matched.
+
+No prompt logic changes: the deliberation itself is domain-agnostic.
+
+---
+
 ## User guide
 
 Ready to dive in? Check out the [user guide](docs/user_guide.md) for a detailed overview of the neuro-san library
