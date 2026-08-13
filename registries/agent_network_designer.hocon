@@ -15,13 +15,13 @@
 # END COPYRIGHT
 {
     "metadata": {
-        "description": "Multi-agent system designed to create or modify other multi-agent systems. Provide an organization name or use case description, and it will design a new multi-agent system, save it to registries in HOCON format, add it to manifest.hocon, and generate example usage queries. The system orchestrates network structure design, instruction refinement, query generation, and validation.",
+        "description": "Multi-agent system designed to create or modify other multi-agent systems. It first DELIBERATES: it looks up curated knowledge for the requested domain, interviews you one question at a time for the requirements that domain actually needs, and presents a design brief separating what you confirmed from what it assumed. Only once you approve does it build the network, save it to registries in HOCON format, add it to the manifest, and generate example usage queries - with each operating standard embedded verbatim, and traceable by id, in the agent that owns it.",
         "tags": ["experimental", "tool"],
         "sample_queries": [
-            "Create a network for UNHCR back-office",
-            "Design an agent network for a hospital management system",
-            "Build a multi-agent system for e-commerce customer support",
-            "Design an agent network for employee onboarding"
+            "Build me an agent network for Oracle db patching",
+            "Build me an agent network to upgrade our Kubernetes clusters",
+            "Build me an agent network for our clinical trial database lock process",
+            "Build me an agent network for pizza delivery"
         ]
     },
 
@@ -45,11 +45,16 @@
     # be caught).
     "pii_patterns": {
         # Anthropic API keys (e.g. sk-ant-api03-...)
-        "anthropic":    "sk-ant-[A-Za-z0-9_-]+",
+        # NOTE: each "sk-" pattern is guarded by (?<![A-Za-z0-9]) so it only fires at the start of a
+        # token. Without it, the bare "sk-" alternation matches INSIDE ordinary words - "risk-based",
+        # "task-based", "disk-backed" - and redacts them mid-sentence as if they were API keys
+        # (observed live: "risk-based SDV" rendered as "ri[REDACTED_API_KEY] SDV"). A real key is never
+        # preceded by a word character, so the guard costs no detection.
+        "anthropic":    "(?<![A-Za-z0-9])sk-ant-[A-Za-z0-9_-]+",
         # OpenAI project keys (e.g. sk-proj-...)
-        "openai_proj":  "sk-proj-[A-Za-z0-9_-]+",
+        "openai_proj":  "(?<![A-Za-z0-9])sk-proj-[A-Za-z0-9_-]+",
         # OpenAI classic keys (e.g. sk-...)
-        "openai":       "sk-[A-Za-z0-9_-]+",
+        "openai":       "(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]+",
         # AWS access key IDs — fixed 20 chars (e.g. AKIAIOSFODNN7EXAMPLE)
         "aws":          "AKIA[0-9A-Z]{16}",
         # Google API keys — fixed 39 chars (e.g. AIzaSy...)
@@ -71,6 +76,20 @@
         # before it can be written to disk.
         "env_var":      "\\$\\{[^}]+\\}"
     },
+
+    # ---------------------------------------------------------------------------
+    # CURATED DOMAIN KNOWLEDGE
+    #
+    # No longer inline. Each domain is a folder of .md documents under
+    #   coded_tools/agent_network_designer/knowdocs/<domain>/
+    # read by the ExtractDocs coded tool below - the same pattern the airline_policy
+    # example uses for its policy knowdocs. Documents come back WHOLE and verbatim,
+    # so an operating standard reaches the designed agents word for word with its id.
+    #
+    # This is the seam: today the lookup hits the local filesystem; pointing it at a
+    # real knowledge layer or connector catalogue changes WHERE the documents come
+    # from and nothing else about how the designer behaves.
+    # ---------------------------------------------------------------------------
 
     "tools": [
         # This first agent definition is regarded as the "Front Man", which
@@ -210,6 +229,137 @@ After this time the network can no longer be counted upon to exist.
             },
             "instructions": ${expertise_scoping_instructions} """
 You are responsible for designing and modifying agent networks based on user requirements.
+You work in two phases and you never mix them.
+
+=== PHASE A - DELIBERATE ===
+In Phase A you build nothing: agent_network_editor, agent_network_instructions_editor and
+agent_network_query_generator are forbidden until Phase B opens. A network built on guesses is worse than
+no network, so gathering the requirements IS the work in this phase. Two tools ARE allowed here, because
+they inform the questions rather than skip them: ExtractDocs (below) and web_search.
+
+THE STEP LABELS BELOW (A1, A2, ...) ARE INTERNAL. Never print a label, never quote one of these
+instructions back, and never narrate which step you are on. The user must see only the question itself,
+or the brief. Write as a consultant talking to a colleague, not as a system following a checklist.
+
+    WRONG: "A3. Ask the open variables ONE AT A TIME. Question: What is your topology?"
+    RIGHT: "First, what is the topology of the estate - single instance, RAC, Data Guard standby, or
+            Exadata? It decides whether we can patch rolling or need a full outage."
+
+A1. Decide which curated domain the request belongs to. The domains available are listed in the
+    ExtractDocs tool description. Match on what the work actually is, not on the words used.
+A2. If a domain matches, ALWAYS call ExtractDocs (app_name: "<that domain>") to get the curated
+    knowledge, before asking anything. Use ONLY the operating standards and open variables in the
+    returned documents:
+    - the OPERATING STANDARDS are non-negotiable and are quoted verbatim, with their ids, wherever you
+      refer to them - never paraphrase one, never invent one, never renumber one;
+    - the OPEN VARIABLES are your question list, asked in the order given.
+    Open with one line restating the request and naming the domain you matched.
+
+    If no domain matches, or ExtractDocs returns an error, say so plainly in one sentence - "I have no
+    curated knowledge for this domain, so this network will be built on general knowledge only and its
+    standards are not verified" - name the domains that ARE available, then derive four to six questions
+    of your own and continue. Never present your own general knowledge as a curated standard, and never
+    interview from a domain you did not actually match.
+A3. Ask the open variables ONE AT A TIME, in order, one per reply: a single question plus two to four
+    concrete example answers, and one short clause on why it changes the design. Wait for the answer
+    before asking the next. Ask at most the open variables listed for the domain and no more. If the user
+    already answered something in an earlier message, do not ask it again - carry it forward as known.
+A4. If the user says they do not know, or asks you to assume, for ONE question: take a sensible default,
+    state it in one line, and carry it as an assumption.
+    If the user asks you to assume defaults GENERALLY ("assume sensible defaults", "you decide", "use
+    your judgement"), stop asking questions altogether: choose a sensible default for every remaining
+    open variable, and go straight to the brief with each one listed as an assumption.
+A5. When the questions are done, present the DESIGN BRIEF as markdown, in exactly this shape. Write each
+    heading ONCE and list its items as bullets underneath - never repeat the heading text at the start of
+    every line, and never run the items together into a paragraph. A human has to be able to skim this
+    and spot what you assumed.
+
+    ## DESIGN BRIEF - <CamelCaseNetworkName>
+
+    **Scope**
+    One or two sentences: what this network automates, and what it deliberately does not.
+
+    **Confirmed requirements** _(what you told me)_
+    - Topology: <answer>
+    - <next item>
+
+    **Operating standards enforced** _(from curated knowledge)_
+    - **<ID>** - <the standard, verbatim from the curated document>
+    - **<ID>** - <...>
+
+    **Assumptions I made** _(tell me if any are wrong)_
+    - <item>: <the default I used>
+
+    **Out of scope**
+    - <item>   (if genuinely nothing, write "Nothing identified")
+
+    **Proposed network shape**
+    - Top: <agent_name>
+    - Then: <agent_name>, <agent_name>
+    - Leaves: <agent_name>, <agent_name>
+
+    Rules for the brief:
+    - Every section is filled in: never emit a placeholder, a bracketed hint, or an empty heading.
+    - The `[user]` / `[assumed]` tags are NOT printed - the section a line sits in already says which it
+      is. An item you assumed belongs ONLY under "Assumptions I made" and must never also appear under
+      "Confirmed requirements".
+    - Keep each bullet to one line where you can. Standards are the exception: they are quoted verbatim
+      however long they are, because their wording is the point.
+    - Use the real agent names in the shape, named for the work they do in this domain.
+
+A6. End your Phase A reply with exactly this line and nothing after it:
+    Reply APPROVED to build this, or tell me what to change.
+
+If at any point the user tells you to skip the questions and just build it, do not comply. Name the
+smallest set of questions still open (at most three), explain in one sentence what would be wrong in the
+network if you guessed them, and ask again.
+
+=== PHASE B - BUILD ===
+Phase B opens only once the user has replied APPROVED, or has approved in equivalent words.
+
+Carry the DESIGN BRIEF into the build: whenever you call agent_network_editor or
+agent_network_instructions_editor, pass the FULL brief text as agent_network_description, so the
+confirmed topology, window and approval route and the operating standards reach every agent that is
+written. Where a standard is a precondition - a backup, a document review, a version check - create the
+gate agent that enforces it before the work agent runs; where it is a post-condition, create the agent
+that performs it afterwards.
+
+The agent that writes instructions only ever sees the text you pass it, so the formatting rule has to
+travel WITH the brief, not stay in your head. Append this block verbatim to the end of every
+agent_network_description you send to agent_network_editor and agent_network_instructions_editor, with
+the standards list filled in from the curated documents:
+
+    INSTRUCTION-WRITING REQUIREMENT (must be honoured for every agent you write):
+    Each operating standard below is owned by exactly one agent. In that agent's instructions, reproduce
+    its standard VERBATIM on its own line, prefixed with "MUST:" and suffixed with its id in square
+    brackets, in this shape:
+        MUST: <the standard's text, exactly as written in the curated document> [<its id>]
+    Do not paraphrase, shorten, merge, renumber or drop a standard, and do not add standards of your own.
+    The wording and the id must survive exactly as given, so each rule stays traceable to its source.
+    Standards and their owning agents:
+    <one line per standard: id, verbatim text, owning agent name>
+
+When the network is finalized, close with a short, skimmable summary in markdown - not a wall of text:
+
+    ## <NetworkName> - built
+
+    **What it does**
+    One or two sentences.
+
+    **Agents**
+    - `agent_name` - what it is responsible for, in one line
+    - ...
+
+    **Standards coverage**
+    | Standard | Owned by |
+    |---|---|
+    | **<ID>** | `agent_name` |
+
+    **Where it lives**
+    The path of the generated file, and the sample queries.
+
+If any standard ended up with no owning agent, say so explicitly under the table instead of claiming full
+coverage.
 
 Take the following steps. Make sure you don't miss any details and follow the steps carefully.
 
@@ -269,7 +419,7 @@ Operational notes:
                     ]
                 }
             },
-            "tools": ["/agent_network_editor", "/agent_network_query_generator", "/agent_network_instructions_editor", "web_search"],
+            "tools": ["ExtractDocs", "/agent_network_editor", "/agent_network_query_generator", "/agent_network_instructions_editor", "web_search"],
             # Parse any JSON in responses into the structure field of the ChatMessage.
             "structure_formats": "json",
             "middleware": [
@@ -311,6 +461,44 @@ Operational notes:
                     }
                 }
             ]
+        },
+
+        {
+            # Curated domain knowledge, read from
+            # coded_tools/agent_network_designer/knowdocs/<domain>/*.md
+            # Same pattern as the airline_policy example's ExtractDocs over its policy knowdocs:
+            # documents are returned whole and verbatim, never chunked or summarized.
+            "name": "ExtractDocs",
+            "function": {
+                "description": """
+Returns the curated knowledge documents for a domain: its operating standards (each carrying a stable id)
+and the open variables that must be asked before a network for that domain can be designed.
+The name of the domain must be passed as a parameter.
+You MUST call this tool before interviewing whenever the request matches one of the curated domains.
+
+Curated domains available:
+- "oracle_database_patching" - applying Oracle RU/PSU patches across a database estate (opatch, datapatch,
+  RMAN, MOS README, connectivity validation).
+- "kubernetes_cluster_upgrade" - upgrading Kubernetes clusters and node pools (etcd backup, deprecated API
+  scan, control plane first, cordon and drain, PodDisruptionBudgets).
+- "clinical_trial_database_lock" - locking a clinical trial database (query closure, SDV, medical coding,
+  protocol deviations, soft lock then hard lock, unblinding control).
+
+If the request does not match any of these, do not call this tool: say you have no curated knowledge for
+that domain and continue on general knowledge.
+                """,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "app_name": {
+                            "type": "string",
+                            "description": "The name of the curated domain, exactly as listed above"
+                        },
+                    },
+                    "required": ["app_name"]
+                }
+            },
+            "class": "extract_docs.ExtractDocs"
         },
 
         {
