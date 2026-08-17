@@ -416,6 +416,92 @@ Curated domains shipped here:
 | Kubernetes cluster upgrade | `kubernetes_cluster_upgrade` | `K8S-01`…`K8S-06` |
 | Clinical trial database lock | `clinical_trial_database_lock` | `DBL-01`…`DBL-06` |
 
+### The design theory: how one designer stays industry-agnostic
+
+#### Mechanism and content are separated
+
+The designer is a **shell plus a knowledge base**: an elicitation-and-assembly procedure holding no domain
+facts, and swappable domain facts holding no procedure.
+
+| Layer | Holds | Lives in | Owned by |
+|---|---|---|---|
+| **L1 — method** | how to elicit, brief, gate, and structure a network | the designer prompt | platform team |
+| **L2 — domain** | operating standards and open variables for one domain | `knowdocs/<domain>/*.md` | domain expert |
+| **L3 — instance** | this estate, this window, this approver | the interview | the requester |
+
+The generated network is a function of all three. Industry-agnosticism is precisely the claim that **L1
+contains no L2**: any domain-specific noun surviving in the designer's instructions is a defect, because it
+would bias every other domain. That is why the prompt carries no Oracle vocabulary, not even in its
+formatting examples.
+
+#### Two kinds of knowledge are enough
+
+An operational process needs only two kinds of knowledge to be designable, and separating them is what lets
+one interviewer serve every domain:
+
+- **Normative** — what must hold regardless of circumstance. Invariant, carries a stable id, quoted
+  verbatim. *Take a full RMAN backup before applying any patch.* These are **retrieved**.
+- **Situational** — what varies per instance and only the requester knows. *Is this RAC, or single
+  instance?* These are **elicited**, one at a time.
+
+Open variables are written as `id | question | example answers | why it changes the design`. That last
+field lets the shell justify a question it does not itself understand.
+
+#### Temporal role determines topology
+
+This is the rule that turns knowledge into architecture, and it is fully domain-neutral. Each standard has
+a temporal role relative to the work, and that role fixes where its agent sits in the network:
+
+```text
+precondition  -> gate agent, upstream of the work agent
+                 (RMAN backup / etcd snapshot / query closure)
+work          -> the operation itself
+                 (apply the RU / drain the node / apply the soft lock)
+postcondition -> validator agent, downstream, owns hand-back
+                 (datapatch and connectivity / workload health / hard-lock e-signature)
+```
+
+The three shipped domains are the same shape in different vocabulary: prove you can recover, do the work,
+prove it still works, hand back. The designer does not know Oracle from Kubernetes; it knows that a
+standard expressing a precondition produces a gate.
+
+#### Review becomes a property check
+
+Embedding standards verbatim with their ids turns correctness review into something mechanical:
+
+- **Coverage** — every standard has exactly one owning agent.
+- **Fidelity** — the text in the agent matches the text in the document, exactly.
+- **Provenance** — every rule traces to an id in a governed document.
+
+This moves the expertise requirement: a domain expert is needed **once**, to author the pack. After that a
+reviewer who has never patched a database can audit any generated network, because the checks are
+`grep`-able rather than judgement calls.
+
+#### How to falsify it
+
+The scenarios below are an experiment, not a tour. L1 is held constant while L2 varies:
+
+- Oracle, Kubernetes and clinical lock must produce **different questions, different topologies and
+  different ids** — evidence that behaviour follows the documents.
+- Pizza delivery is the **control**: with no pack, the designer must degrade honestly instead of
+  improvising standards. If it invents confident "pizza standards", L1 has been contaminated with
+  authoritative-sounding behaviour and the agnosticism claim fails.
+
+#### Known limits
+
+1. **A `MUST:` line is not a control.** Embedding a standard makes it salient, not enforced. Real
+   enforcement is deterministic tooling that refuses to proceed; the instruction is a specification, not a
+   guardrail.
+2. **Packs are asserted, not verified.** Authority is inherited from whoever wrote the file. A wrong pack
+   yields an authoritative-looking wrong network, which is why versioning, ownership and approval of packs
+   are the natural next step.
+3. **Intent matching is an unsolved classifier.** Today it is the model's judgement over a list of domains.
+   Matching the *wrong* domain is worse than matching none, and there is no conflict resolution when two
+   domains both plausibly apply.
+4. **The meta-model favours runbook-shaped work.** Sequential, gate-heavy processes fit well. Domains whose
+   essence is optimisation, negotiation or open-ended judgement do not reduce to invariants plus
+   parameters, and forcing them in produces a checklist where reasoning is required.
+
 ### Scenario 1 — a curated domain (Oracle)
 
 Send each line as a separate turn and wait for the reply:
