@@ -425,9 +425,9 @@ facts, and swappable domain facts holding no procedure.
 
 | Layer | Holds | Lives in | Owned by |
 |---|---|---|---|
-| **L1 — method** | how to elicit, brief, gate, and structure a network | the designer prompt | platform team |
-| **L2 — domain** | operating standards and open variables for one domain | `knowdocs/<domain>/*.md` | domain expert |
-| **L3 — instance** | this estate, this window, this approver | the interview | the requester |
+| **L1 - method** | how to elicit, brief, gate, and structure a network | the designer prompt | platform team |
+| **L2 - domain** | operating standards and open variables for one domain | `knowdocs/<domain>/*.md` | domain expert |
+| **L3 - instance** | this estate, this window, this approver | the interview | the requester |
 
 The generated network is a function of all three. Industry-agnosticism is precisely the claim that **L1
 contains no L2**: any domain-specific noun surviving in the designer's instructions is a defect, because it
