@@ -1,4 +1,19 @@
-# Neuro SAN Studio
+# Neuro SAN Studio — Deliberating Agent Network Designer
+
+> **About this repository.** This is a derivative of
+> [cognizant-ai-lab/neuro-san-studio](https://github.com/cognizant-ai-lab/neuro-san-studio) (Apache-2.0),
+> carrying one focused change: `agent_network_designer` now **gathers requirements before it builds**. It
+> looks up curated domain knowledge held as documents on disk, interviews you one question at a time,
+> presents a design brief separating what you confirmed from what it assumed, and builds only once you
+> approve — embedding each operating standard verbatim, and traceable by id, in the agent that owns it.
+>
+> See [**Deliberating Agent Network Designer — how to test it**](#deliberating-agent-network-designer--how-to-test-it)
+> for what changed and how to try it. Everything else below is upstream documentation, unchanged.
+>
+> Modified files: `registries/agent_network_designer.hocon`,
+> `coded_tools/agent_network_designer/` (new), `README.md`.
+
+---
 
 **Your launchpad for building intelligent multi-agent systems.** Neuro SAN Studio is a hands-on playground for the
 [Neuro SAN](https://github.com/cognizant-ai-lab/neuro-san) framework, featuring ready-to-run examples, tutorials, and
@@ -371,7 +386,7 @@ Use `ns <command> --help` for the full flag list of any subcommand.
 
 ## Deliberating Agent Network Designer — how to test it
 
-This branch changes `agent_network_designer` so that it **gathers requirements before it builds**, and
+This repository changes `agent_network_designer` so that it **gathers requirements before it builds**, and
 grounds what it builds in curated domain knowledge held as documents on disk.
 
 Start the server, open the UI, and select **`agent_network_designer`**:
@@ -393,7 +408,7 @@ ns run
 - **Standards stay traceable.** Every operating standard is embedded in the agent that owns it as
   `MUST: <standard text> [<id>]`, and the closing summary maps each id to its owning agent.
 
-Curated domains shipped in this branch:
+Curated domains shipped here:
 
 | Domain | `app_name` | Standard ids |
 |---|---|---|
