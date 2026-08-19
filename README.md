@@ -12,8 +12,9 @@ design brief separating what you confirmed from what it assumed, and builds only
 each operating standard embedded verbatim, and traceable by id, in the agent that owns it.
 
 > Derived from [cognizant-ai-lab/neuro-san-studio](https://github.com/cognizant-ai-lab/neuro-san-studio)
-> (Apache-2.0). Changed here: `registries/agent_network_designer.hocon` and
-> `coded_tools/agent_network_designer/` (new). Everything else is upstream; see
+> (Apache-2.0). Changed here: `registries/agent_network_designer.hocon`, plus
+> `coded_tools/agent_network_designer/`, `tests/coded_tools/agent_network_designer/` and
+> `docs/knowledge_packs.md` (all new). Everything else is upstream; see
 > [upstream docs](https://github.com/cognizant-ai-lab/neuro-san-studio#readme) for the platform itself.
 
 ---
@@ -38,13 +39,15 @@ Ports already taken? `ns run --nsflow-port 4174 --server-http-port 8081`.
 
 - **It deliberates first.** Curated knowledge for the domain is retrieved, then you are interviewed one
   question at a time. Nothing is built until you approve.
-- **Knowledge lives in documents, not in the prompt.** Each domain is a folder of `.md` files under
-  `coded_tools/agent_network_designer/knowdocs/<domain>/`, read by the `ExtractDocs` coded tool - the same
-  pattern `airline_policy` uses. Documents are returned whole and verbatim, never chunked, so a standard
-  reaches the designed agents word for word.
+- **Knowledge lives in documents, not in the prompt.** Each domain is a folder - a *knowledge pack* - under
+  `coded_tools/agent_network_designer/knowdocs/<domain>/`, read by the `ExtractDocs` coded tool. Packs are
+  discovered by scanning that root, so adding a domain is dropping a folder in; point
+  `AGENT_NETWORK_DESIGNER_KNOWDOCS` elsewhere to serve packs from outside the repository. Documents are
+  returned whole and verbatim, never chunked, so a standard reaches the designed agents word for word.
 - **It ends with a design brief** that separates confirmed requirements from flagged assumptions.
-- **Standards stay traceable.** Each one appears in its owning agent as `MUST: <text> [<id>]`, and the
-  closing summary maps every id to an agent.
+- **Standards stay traceable, and the trace is checked.** Each one appears in its owning agent as
+  `MUST: <text> [<id>]`, and the closing coverage table is *computed* by `VerifyStandards` rather than
+  written by the model about its own work. See [knowledge packs](docs/knowledge_packs.md).
 
 | Domain | `app_name` | Standard ids |
 |---|---|---|
@@ -95,8 +98,10 @@ produces a gate.
 
 **Review becomes a property check.** Verbatim text plus ids makes correctness mechanical - *coverage*
 (every standard has exactly one owning agent), *fidelity* (agent text matches document text exactly), and
-*provenance* (every rule traces to an id). A domain expert is needed once, to author the pack; after that a
-reviewer who has never patched a database can audit any generated network.
+*provenance* (every rule traces to an id). All three are computed by `VerifyStandards`, deterministically
+and with no language model, so the closing table is a measurement rather than a claim. A domain expert is
+needed once, to author the pack; after that a reviewer who has never patched a database can audit any
+generated network.
 
 **How to falsify it.** The scenarios below hold L1 constant and vary L2. Three domains must yield different
 questions, topologies and ids. Pizza delivery is the control: with no pack the designer must degrade
@@ -105,10 +110,14 @@ and the claim fails.
 
 ### Known limits
 
-1. **A `MUST:` line is not a control.** Embedding a standard makes it salient, not enforced. Real
-   enforcement is deterministic tooling that refuses to proceed.
-2. **Packs are asserted, not verified.** A wrong pack yields an authoritative-looking wrong network, which
-   is why versioning, ownership and approval of packs are the natural next step.
+1. **A `MUST:` line is still not a runtime control.** `VerifyStandards` now checks that a standard
+   *survived into the artifact*, verbatim and attributed. It cannot make the generated network obey its own
+   `MUST` once that network runs - that needs deterministic tooling in the built agents themselves.
+   Verification is also advisory by default: it reports, and the network is still written.
+2. **A valid pack is not a correct pack.** A manifest and `validate()` catch malformed packs - duplicate
+   ids, ids outside the declared pattern, a missing `why` - and provenance records who owns and approved
+   one. Nothing checks that what a pack *says* is right, so a well-formed wrong pack still yields an
+   authoritative-looking wrong network. Approval remains a recorded field, not a workflow.
 3. **Intent matching is an unsolved classifier.** Matching the *wrong* domain is worse than matching none,
    and nothing resolves the case where two domains both apply.
 4. **The meta-model favours runbook-shaped work.** Sequential, gate-heavy processes fit well; optimisation,
@@ -122,6 +131,10 @@ Send each line as its own turn.
 
 ### 1. A curated domain - Oracle
 
+<!-- The scenario turns below are quoted verbatim, so two rows run past the line limit. pymarkdown has
+     no equivalent of markdownlint's MD013 `tables: false`, which .pymarkdownlint.yaml sets but which is
+     silently ignored, so the exemption is declared here instead. -->
+<!-- pyml disable-num-lines 10 line-length-->
 | Send | Expect |
 |---|---|
 | `Build me an agent network for Oracle db patching` | Names the matched domain, then **one** question with examples |
@@ -130,7 +143,7 @@ Send each line as its own turn.
 | `About 40 databases. DEV, then QA, then PROD. Four-hour Saturday window, PROD rolling with no full outage.` | Carries it forward |
 | `DBA team takes the RMAN backup, verified restore point required. Production gated by a ServiceNow CR approved by CAB` | The remaining variables |
 | `opatch rollback, and the DBA team signs off connectivity.` | The **design brief** |
-| `APPROVED` | Builds, then the standards-coverage table |
+| `APPROVED` | Builds, then the **computed** standards-coverage table |
 
 In the brief: confirmed requirements contain only what you said, assumptions are listed separately,
 standards are verbatim with `ODB-0x` ids, and the shape names real agents.
@@ -162,26 +175,37 @@ still interview you. Inventing confident standards is a failure.
 
 ### Check the artifact, not the chat
 
+Verify a generated network against its pack - no language model, no API key, exit code 0 or 1:
+
 ```bash
 ls registries/generated/
-grep -c "MUST:" registries/generated/<name>.hocon
-grep -oE "(ODB|K8S|DBL)-0[1-6]" registries/generated/<name>.hocon | sort -u
+python -m coded_tools.agent_network_designer.standards_verifier \
+    registries/generated/<name>.hocon --domain <domain>
 ```
 
-Each standard should sit inside the agent that owns it - the backup gate carrying the backup standard, the
-validator carrying the validation standard.
+That reports coverage, fidelity and provenance per standard, so it is also the check to run in CI over
+already-generated networks. Each standard should sit inside the agent that owns it - the backup gate
+carrying the backup standard, the validator carrying the validation standard.
 
 ---
 
 ## Adding a domain
 
-1. Create `coded_tools/agent_network_designer/knowdocs/<your_domain>/` with `operating_standards.md` and
-   `open_variables.md` (copy an existing pair for the shape).
-2. Add one line to `docs_path` in `coded_tools/agent_network_designer/extract_docs.py`.
-3. Add the domain to the `ExtractDocs` description in `registries/agent_network_designer.hocon`.
+Drop a folder into the knowdocs root:
 
-No prompt logic changes - the deliberation itself is domain-agnostic. Keep packs short: documents are
-returned whole, so they are standards and open variables, not manuals.
+```text
+coded_tools/agent_network_designer/knowdocs/<your_domain>/
+    pack.hocon              identity, provenance, id pattern, standard roles
+    operating_standards.md  the non-negotiables, each with a stable id
+    open_variables.md       the interview script
+```
+
+Copy an existing set for the shape. Domains are discovered by scanning the root, so there is no Python to
+edit and no prompt to edit - the designer asks `ListDomains` what exists rather than being told. Set
+`AGENT_NETWORK_DESIGNER_KNOWDOCS` to serve packs from outside the repository entirely.
+
+Keep packs short: documents are returned whole, so they are standards and open variables, not manuals.
+[docs/knowledge_packs.md](docs/knowledge_packs.md) has the field-by-field format and a checklist.
 
 ---
 
