@@ -14,153 +14,104 @@
 #
 # END COPYRIGHT
 
-import logging
-import os
-from typing import Any
-from typing import Dict
-from typing import Union
+"""
+Read the curated knowledge documents for one domain.
 
-from leaf_common.serialization.util.text_file_reader import TextFileReader
+Documents are returned WHOLE and verbatim - never chunked or summarised - because the operating
+standards they carry have to reach the designed agents word for word, with their ids intact.
+Anything less and the fidelity check in verify_standards has nothing to compare against.
+
+Domain resolution is delegated to knowledge_pack, so:
+
+  * domains are discovered by scanning the knowdocs root rather than listed here in Python;
+  * the root honours AGENT_NETWORK_DESIGNER_KNOWDOCS, and otherwise resolves relative to this
+    module rather than the process working directory;
+  * an unknown domain is an explicit MISS listing what does exist, not a silent fallback to
+    some default document. The designer has to KNOW it missed so it can say so and fall back
+    to general knowledge, rather than interviewing the user from the wrong domain's standards.
+"""
+
+import logging
+from typing import Any
+
 from neuro_san.interfaces.coded_tool import CodedTool
-from pypdf import PdfReader
-from pypdf.errors import PyPdfError
+
+from coded_tools.agent_network_designer.knowledge_pack import KnowledgePack
+from coded_tools.agent_network_designer.knowledge_pack import discover_domains
+from coded_tools.agent_network_designer.knowledge_pack import knowdocs_root
+from coded_tools.agent_network_designer.knowledge_pack import load_pack
 
 logger = logging.getLogger(__name__)
 
 
 class ExtractDocs(CodedTool):
     """
-    CodedTool implementation extracts the curated knowledge documents for a domain.
-    Returns a dictionary mapping each document file name to its text.
+    CodedTool implementation that extracts the curated knowledge documents for a domain.
 
-    Documents are returned WHOLE and verbatim - never chunked or summarized - because the
-    operating standards they carry have to reach the designed agents word for word, with
-    their ids intact.
+    Returns a dictionary mapping each document file name to its text, plus the pack's identity
+    and provenance so the designer can state what it built from.
     """
 
-    KNOWDOCS = "coded_tools/agent_network_designer/knowdocs"
-
-    def __init__(self):
-        self.default_path = None
-
-        # Curated knowledge domains. To add a domain: drop a folder of .md files under
-        # knowdocs/ and add one line here.
-        self.docs_path = {
-            "oracle_database_patching": f"{self.KNOWDOCS}/oracle_database_patching",
-            "kubernetes_cluster_upgrade": f"{self.KNOWDOCS}/kubernetes_cluster_upgrade",
-            "clinical_trial_database_lock": f"{self.KNOWDOCS}/clinical_trial_database_lock",
-        }
-
-    def invoke(self, args: Dict[str, Any], sly_data: Dict[str, Any]) -> Union[Dict[str, Any], str]:
+    def invoke(self, args: dict[str, Any], sly_data: dict[str, Any]) -> dict[str, Any] | str:
         """
         :param args: An argument dictionary with the following keys:
-            - "directory" (str): The directory containing the documents.
+            - "app_name" (str): the curated domain to read, as reported by ListDomains.
 
-        :param sly_data: A dictionary whose keys are defined by the agent hierarchy,
-            but whose values are meant to be kept out of the chat stream.
-
-            This dictionary is largely to be treated as read-only.
-            It is possible to add key/value pairs to this dict that do not
-            yet exist as a bulletin board, as long as the responsibility
-            for which coded_tool publishes new entries is well understood
-            by the agent chain implementation and the coded_tool implementation
-            adding the data is not invoke()-ed more than once.
+        :param sly_data: A dictionary whose keys are defined by the agent hierarchy, but whose
+            values are meant to be kept out of the chat stream.
 
             Keys expected for this implementation are:
                 None
 
         :return:
             If successful:
-                A dictionary containing extracted text with the keys:
-                - "file_name": The path and name of the processed document file.
-                - "text": The extracted text from the document.
+                A dictionary with the keys:
+                - "files" (dict): document file name to full verbatim text.
+                - "pack" (dict): the domain's id, title, version and provenance line.
+                - "standard_ids" (list): the ids this pack defines, for the designer to quote.
             Otherwise:
                 A text string error message in the format:
                 "Error: <error message>"
         """
-        app_name: str = args.get("app_name", None)
+        domain_id: str | None = args.get("app_name")
+        available: str = ", ".join(discover_domains()) or "none"
+
         logger.debug("############### Curated knowledge reader ###############")
-        logger.debug("Domain: %s", app_name)
-        available = ", ".join(sorted(self.docs_path.keys()))
-        if app_name is None:
+        logger.debug("Domain: %s", domain_id)
+
+        if not domain_id:
             return f"Error: No domain provided. Available curated domains: {available}"
 
-        # Unlike the airline example, an unknown domain is an explicit miss rather than a silent
-        # fallback: the designer has to KNOW it missed so it can say so and fall back to general
-        # knowledge, instead of interviewing the user from the wrong domain's standards.
-        directory = self.docs_path.get(app_name, None)
-        if directory is None:
-            return f'Error: No curated knowledge for domain "{app_name}". Available curated domains: {available}'
+        try:
+            pack: KnowledgePack = load_pack(domain_id)
+        except (FileNotFoundError, OSError):
+            # An explicit miss, not a fallback: see the module docstring.
+            return f'Error: No curated knowledge for domain "{domain_id}". Available curated domains: {available}'
 
-        if not isinstance(directory, (str, bytes, os.PathLike)):
-            raise TypeError(f"Expected str, bytes, or os.PathLike object, got {type(directory).__name__} instead")
+        if not pack.documents:
+            return f'ERROR: No knowledge documents found for domain "{domain_id}" under {knowdocs_root()}.'
 
-        docs = {}
-        for root, _, files in os.walk(directory):
-            for file in files:
-                # Build the full path to the file
-                file_path = os.path.join(root, file)
+        for problem in pack.validate():
+            logger.warning("Knowledge pack problem: %s", problem)
 
-                if file.lower().endswith(".pdf"):
-                    # Extract PDF content
-                    content = self.extract_pdf_content(file_path)
-                    # Store in the dictionary using a relative path (relative to the main directory)
-                    rel_path = os.path.relpath(file_path, directory)
-                    docs[rel_path] = content
-                elif file.lower().endswith((".txt", ".md")):
-                    # Extract text file content
-                    content = self.extract_txt_content(file_path)
-                    # Store in the dictionary using a relative path
-                    rel_path = os.path.relpath(file_path, directory)
-                    docs[rel_path] = content
         logger.debug("############### Documents extraction done ###############")
-        if not docs:
-            logger.debug("No knowledge documents found in the directory.")
-            return f'ERROR: No knowledge documents found for domain "{app_name}" under {directory}.'
-        return {"files": docs}
+        return {
+            "files": pack.documents,
+            "pack": {
+                "id": pack.domain_id,
+                "title": pack.manifest.title,
+                "version": pack.manifest.version,
+                "provenance": pack.manifest.provenance(),
+            },
+            "standard_ids": [standard.standard_id for standard in pack.standards],
+        }
 
-    async def async_invoke(self, args: Dict[str, Any], sly_data: Dict[str, Any]) -> Union[Dict[str, Any], str]:
+    async def async_invoke(self, args: dict[str, Any], sly_data: dict[str, Any]) -> dict[str, Any] | str:
         """
-        Delegates to the synchronous invoke method for now.
+        Delegates to the synchronous implementation.
+
+        :param args: See invoke().
+        :param sly_data: See invoke().
+        :return: See invoke().
         """
         return self.invoke(args, sly_data)
-
-    @staticmethod
-    def extract_pdf_content(pdf_path: str) -> str:
-        """
-        Extract text from a PDF file using pypdf, while attempting to preserve
-        pagination (by inserting page headers).
-
-        :param pdf_path: Full path to the PDF file.
-        :return: Extracted text from the PDF.
-        """
-        text_output = []
-        try:
-            reader = PdfReader(pdf_path)
-            for page_num, page in enumerate(reader.pages):
-                # Add a page header for pagination
-                text_output.append(f"\n\n--- Page {page_num + 1} ---\n\n")
-                # Extract text from the page (fall back to empty string if None)
-                page_text = page.extract_text() or ""
-                text_output.append(page_text)
-        except (PyPdfError, OSError) as e:
-            error = f"Error reading PDF {pdf_path}: {e}"
-            logger.error(error)
-            return f"ERROR: {error}"
-
-        return "".join(text_output)
-
-    @staticmethod
-    def extract_txt_content(txt_path: str) -> str:
-        """
-        Extract text from a plain text file.
-
-        :param txt_path: Full path to the TXT file.
-        :return: Content of the text file.
-        """
-        try:
-            return TextFileReader.read_text_file(txt_path)
-        except OSError as e:
-            error = f"Error reading TXT {txt_path}: {e}"
-            logger.error(error)
-            return f"ERROR: {error}"
