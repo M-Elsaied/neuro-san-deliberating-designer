@@ -48,6 +48,7 @@ hook or a CI job with no agent runtime and no API key. See __main__ at the foot 
 """
 
 import argparse
+import os
 import re
 import sys
 from dataclasses import dataclass
@@ -326,21 +327,38 @@ def render_report(result: VerificationResult) -> str:
 # --------------------------------------------------------------------------------------
 
 
-def network_definition_from_hocon(path: str | Path) -> dict[str, Any]:
+def network_definition_from_hocon(path: str | Path, basedir: str | Path | None = None) -> dict[str, Any]:
     """
     Read a generated agent network HOCON file into the agent-name-to-definition shape.
 
     Lets the same checks run over files already on disk - in CI, in a pre-commit hook, or over
     a directory of previously generated networks - without an agent runtime.
 
+    Includes are resolved relative to ``basedir``, NOT to the file's own directory. That
+    distinction is the whole reason this function does not simply call ConfigFactory.parse_file:
+    a generated network lands in registries/generated/ but writes its includes relative to the
+    repository root (``include "registries/aaosa.hocon"``), because that is how the server loads
+    it. parse_file would look for registries/generated/registries/aaosa.hocon, fail to find it,
+    and then fail to resolve ${aaosa_call} - so every real generated network was unreadable.
+
     :param path: Path to a generated .hocon file.
+    :param basedir: Directory that the file's includes are written relative to. Defaults to the
+        current working directory, which is the repository root in normal use.
     :return: Mapping of agent name to a definition carrying its "instructions".
-    :raises ValueError: If the file cannot be parsed as an agent network.
+    :raises ValueError: If the file cannot be read or parsed as an agent network.
     """
+    use_basedir: str = str(basedir) if basedir is not None else os.getcwd()
     try:
-        config: Any = ConfigFactory.parse_file(str(path))
+        content: str = Path(path).read_text(encoding="utf-8")
+    except OSError as exception:
+        raise ValueError(f"Could not read {path}: {exception}") from exception
+    try:
+        config: Any = ConfigFactory.parse_string(content, basedir=use_basedir)
     except Exception as exception:
-        raise ValueError(f"Could not parse {path}: {exception}") from exception
+        raise ValueError(
+            f"Could not parse {path}: {exception}. "
+            f"Includes were resolved against {use_basedir!r}; pass --basedir if that is wrong."
+        ) from exception
 
     tools: Any = config.get("tools", None)
     if not tools:
@@ -372,6 +390,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("network", help="path to a generated agent network .hocon file")
     parser.add_argument("--domain", required=True, help=f"curated domain; available: {', '.join(discover_domains())}")
     parser.add_argument("--knowdocs", default=None, help="override the knowdocs root")
+    parser.add_argument(
+        "--basedir",
+        default=None,
+        help="directory the network's includes are relative to; defaults to the current directory",
+    )
     arguments = parser.parse_args(argv)
 
     try:
@@ -381,7 +404,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     try:
-        definition: dict[str, Any] = network_definition_from_hocon(arguments.network)
+        definition: dict[str, Any] = network_definition_from_hocon(arguments.network, arguments.basedir)
     except ValueError as exception:
         print(f"Error: {exception}", file=sys.stderr)
         return 2

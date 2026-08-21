@@ -27,6 +27,7 @@ from typing import Any
 
 from neuro_san.interfaces.coded_tool import CodedTool
 
+from coded_tools.agent_network_designer.knowledge_pack import PACK_PROVENANCE
 from coded_tools.agent_network_designer.knowledge_pack import KnowledgePack
 from coded_tools.agent_network_designer.knowledge_pack import discover_domains
 from coded_tools.agent_network_designer.knowledge_pack import load_pack
@@ -104,6 +105,15 @@ class VerifyStandards(CodedTool):
         result: VerificationResult = verify(pack, network_definition)
         report: str = render_report(result)
         logger.debug("Standards verification for %s: ok=%s", domain_id, result.ok)
+
+        # Record the provenance here as well as in ExtractDocs, and the reason is the sly_data
+        # lifecycle rather than belt-and-braces. The session dict is rebuilt from the client's
+        # payload on every turn (DataDrivenChatSession), so a key written during the interview
+        # survives to the build turn only if allow.to_upstream lets it out and the client sends it
+        # back. This tool runs in the SAME turn as persistence, so writing it here guarantees the
+        # generated artifact can state what it was built from even if the round trip is lossy.
+        if sly_data is not None:
+            sly_data[PACK_PROVENANCE] = pack.manifest.provenance()
 
         if args.get("strict") and not result.ok:
             return "Error: Standards verification failed.\n\n" + report

@@ -402,7 +402,14 @@ Operational notes:
                         "agent_network_definition",
                         "agent_network_hocon_text",
                         "agent_network_name",
-                        "agent_reservations"
+                        "agent_reservations",
+                        # The curated pack a network is being built from. This has to be listed
+                        # here or it does not survive the interview: the session's sly_data is
+                        # rebuilt from the client's payload on every turn, so a key written by
+                        # ExtractDocs in the first turn is discarded unless it goes out to the
+                        # client and comes back. Without it the generated artifact has no record
+                        # of its own ancestry.
+                        "agent_network_pack_provenance"
                     ]
                 },
                 "from_downstream": {
@@ -422,7 +429,8 @@ Operational notes:
                         "agent_network_definition",
                         "agent_network_hocon_text",
                         "agent_network_name",
-                        "agent_reservations"
+                        "agent_reservations",
+                        "agent_network_pack_provenance"
                     ]
                 }
             },

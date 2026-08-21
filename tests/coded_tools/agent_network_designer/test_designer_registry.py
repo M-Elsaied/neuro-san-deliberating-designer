@@ -182,6 +182,21 @@ def test_every_coded_tool_class_resolves_to_a_module_on_disk(agents):
     assert not missing, f"declared classes with no module under {CODED_TOOLS_DIR}: {missing}"
 
 
+def test_pack_provenance_is_allowed_upstream_so_it_survives_the_interview(front_man):
+    """
+    A sly_data key not listed in allow.to_upstream cannot outlive the turn that wrote it.
+
+    The session rebuilds sly_data from the client's payload on every turn, so the provenance
+    recorded by ExtractDocs during the interview is discarded before the build turn unless it is
+    permitted upstream. A live run proved this: the generated artifact carried no provenance at
+    all. Removing this entry would silently reintroduce that.
+    """
+    allow: dict[str, Any] = dict(front_man.get("allow") or {})
+    upstream: list[str] = [str(key) for key in dict(allow.get("to_upstream") or {}).get("sly_data", [])]
+
+    assert "agent_network_pack_provenance" in upstream, "provenance will not survive the interview turns without this"
+
+
 def test_the_front_man_can_reach_the_curated_knowledge_tools(front_man, agents):
     """
     A tool nobody lists is a tool nobody calls - the wiring is as load-bearing as the entry.

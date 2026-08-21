@@ -181,6 +181,23 @@ def test_verify_standards_ignores_a_network_supplied_by_the_model(pack, built):
     assert any(dropped in problem for problem in result["problems"])
 
 
+def test_verify_standards_records_provenance_for_the_artifact(built):
+    """
+    The verifier must record the pack's provenance where persistence can reach it.
+
+    ExtractDocs also records it, but during the interview - and the session's sly_data is rebuilt
+    from the client's payload every turn, so an interview-turn write only survives if allow
+    .to_upstream lets it out and the client returns it. This tool runs in the same turn as
+    persistence, which is what makes the generated file's ancestry reliable rather than hopeful.
+    Found by a live run whose artifact had no provenance at all.
+    """
+    sly_data: dict[str, Any] = dict(built)
+    VerifyStandards().invoke({"app_name": DOMAIN}, sly_data)
+
+    assert PACK_PROVENANCE in sly_data, "persistence has no way to learn which pack was used"
+    assert "v1.0.0" in sly_data[PACK_PROVENANCE]
+
+
 def test_verify_standards_refuses_before_anything_is_built():
     """
     Called too early, it must say so rather than report an empty network as clean.

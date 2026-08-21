@@ -43,6 +43,7 @@ from coded_tools.agent_network_designer.knowledge_pack import load_pack
 from coded_tools.agent_network_designer.knowledge_pack import normalise
 from coded_tools.agent_network_designer.knowledge_pack import parse_standards
 from coded_tools.agent_network_designer.standards_verifier import extract_embedded_standards
+from coded_tools.agent_network_designer.standards_verifier import network_definition_from_hocon
 from coded_tools.agent_network_designer.standards_verifier import render_report
 from coded_tools.agent_network_designer.standards_verifier import verify
 
@@ -382,6 +383,40 @@ def test_edge_c5_a_pack_error_blocks_verification_of_an_otherwise_perfect_networ
     assert not result.ok
     assert any("WRONG-02" in problem for problem in result.problems())
     assert "did not verify clean" in render_report(result)
+
+
+def test_edge_c8_a_generated_network_whose_includes_are_root_relative_still_parses(tmp_path):
+    """
+    Generated networks live in registries/generated/ but write includes relative to the repo root.
+
+    ``include "registries/aaosa.hocon"`` plus ``${aaosa_call}`` is what every real generated
+    network looks like, because that is how the server loads it. Resolving includes against the
+    file's own directory looks for registries/generated/registries/aaosa.hocon, misses, and then
+    cannot resolve the substitution - so the offline verifier could not read a single real
+    artifact. The earlier test used a synthetic file with no includes, which is why it passed.
+    """
+    (tmp_path / "registries").mkdir()
+    (tmp_path / "registries" / "aaosa.hocon").write_text('{ aaosa_call = "shared-fragment" }\n', encoding="utf-8")
+    generated: Path = tmp_path / "registries" / "generated"
+    generated.mkdir()
+    network: Path = generated / "net.hocon"
+    network.write_text(
+        '{\n    include "registries/aaosa.hocon"\n'
+        '    "tools": [\n'
+        '        { "name": "gate", "call": ${aaosa_call},\n'
+        '          "instructions": """MUST: A rule. [ABC-01]""" }\n'
+        "    ]\n}\n",
+        encoding="utf-8",
+    )
+
+    # Resolved against the repository root, as the server does: readable.
+    definition = network_definition_from_hocon(network, basedir=tmp_path)
+    assert "MUST: A rule. [ABC-01]" in definition["gate"]["instructions"]
+
+    # Resolved against the file's own directory: the include misses and the error says so.
+    with pytest.raises(ValueError) as failure:
+        network_definition_from_hocon(network, basedir=generated)
+    assert "--basedir" in str(failure.value)
 
 
 def test_edge_c6_the_same_pack_loaded_twice_gives_the_same_answer(tmp_path):
