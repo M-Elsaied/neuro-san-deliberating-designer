@@ -1,0 +1,26 @@
+# Knowledge pack manifest - Kubernetes cluster upgrade.
+# See oracle_database_patching/pack.hocon for what each field means.
+{
+    domain_id = "kubernetes_cluster_upgrade"
+    title = "Kubernetes cluster upgrade"
+    summary = "upgrading Kubernetes clusters and node pools (etcd backup, deprecated API scan, control plane first, cordon and drain, PodDisruptionBudgets)"
+
+    version = "1.0.0"
+    # Set this to the team that owns the SOP. It is rendered into the generated network's
+    # provenance line, so keep it short - a team name, not a sentence.
+    owner = "unassigned"
+    approved_by = ""
+    effective_date = ""
+    source = "Typical industry practice and upstream Kubernetes version-skew policy. Confirm against your own platform SOP before relying on it."
+
+    standard_id_pattern = "K8S-\\d{2}"
+
+    roles {
+        "K8S-01" = precondition
+        "K8S-02" = precondition
+        "K8S-03" = precondition
+        "K8S-04" = work
+        "K8S-05" = work
+        "K8S-06" = postcondition
+    }
+}
