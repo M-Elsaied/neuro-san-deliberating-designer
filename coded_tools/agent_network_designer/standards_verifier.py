@@ -36,6 +36,8 @@ three properties the design already claims into checks that either pass or do no
   coverage    every standard in the pack is owned by exactly one agent
   fidelity    the embedded text matches the pack text
   provenance  every embedded id exists in the pack - nothing was invented
+  pack        the pack itself loaded soundly, since a standard that never loaded cannot have
+              reached the network however carefully it was built
 
 A fourth, structural check runs when the pack declares temporal roles: a precondition and a work
 standard must not be owned by the same agent, because a gate that is also the operation it guards
@@ -100,18 +102,29 @@ class VerificationResult:  # pylint: disable=too-many-instance-attributes
     unknown: list[EmbeddedStandard] = field(default_factory=list)
     infidelities: list[dict[str, str]] = field(default_factory=list)
     structural: list[str] = field(default_factory=list)
-    pack_problems: list[str] = field(default_factory=list)
+    pack_errors: list[str] = field(default_factory=list)
+    pack_warnings: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
-        """:return: True when coverage, fidelity, provenance and structure all hold."""
-        return not (self.missing or self.ambiguous or self.unknown or self.infidelities or self.structural)
+        """
+        :return: True when the network carries the pack faithfully AND the pack itself is sound.
+
+        Pack errors gate this deliberately. If a standard never loaded - an id outside the declared
+        pattern, an empty body, a duplicate - then no amount of correct building can produce a
+        network that carries the pack, and the designer is told to speak up only when this is False.
+        Reporting such a network as verified would be precisely the self-certification this module
+        exists to remove. Pack warnings do not gate: they leave the standards intact.
+        """
+        return not (
+            self.missing or self.ambiguous or self.unknown or self.infidelities or self.structural or self.pack_errors
+        )
 
     def problems(self) -> list[str]:
         """
         :return: Every failure as a flat list of human-readable lines.
         """
-        lines: list[str] = []
+        lines: list[str] = [f"PACK: {problem}" for problem in self.pack_errors]
         for standard_id in self.missing:
             lines.append(f"COVERAGE: {standard_id} is not embedded in any agent.")
         for standard_id in self.ambiguous:
@@ -228,7 +241,8 @@ def verify(pack: KnowledgePack, network_definition: dict[str, Any]) -> Verificat
         domain_id=pack.domain_id,
         provenance=pack.manifest.provenance(),
         roles={standard.standard_id: standard.role or "-" for standard in pack.standards},
-        pack_problems=pack.validate(),
+        pack_errors=pack.validate_errors(),
+        pack_warnings=pack.validate_warnings(),
     )
 
     known_ids: set[str] = {standard.standard_id for standard in pack.standards}
@@ -298,11 +312,11 @@ def render_report(result: VerificationResult) -> str:
         lines.append("")
         lines.extend(f"- {problem}" for problem in result.problems())
 
-    if result.pack_problems:
+    if result.pack_warnings:
         lines.append("")
-        lines.append("**Pack warnings** (about the source documents, not this network):")
+        lines.append("**Pack warnings** (under-specified, but the standards are intact):")
         lines.append("")
-        lines.extend(f"- {problem}" for problem in result.pack_problems)
+        lines.extend(f"- {problem}" for problem in result.pack_warnings)
 
     return "\n".join(lines)
 

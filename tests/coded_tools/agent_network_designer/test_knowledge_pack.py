@@ -25,6 +25,7 @@ from pathlib import Path
 import pytest
 
 from coded_tools.agent_network_designer.knowledge_pack import KNOWDOCS_ENV_VAR
+from coded_tools.agent_network_designer.knowledge_pack import UNLOADED_OFF_PATTERN
 from coded_tools.agent_network_designer.knowledge_pack import KnowledgePack
 from coded_tools.agent_network_designer.knowledge_pack import discover_domains
 from coded_tools.agent_network_designer.knowledge_pack import knowdocs_root
@@ -278,8 +279,9 @@ def test_an_id_outside_the_declared_pattern_is_reported(tmp_path):
     # exactly why it has to be REPORTED. A rule that silently disappears between the document and the
     # network is the failure this whole check exists to prevent.
     assert [standard.standard_id for standard in pack.standards] == ["ABC-01"]
-    assert pack.unmatched_standard_ids == ["XYZ-99"]
-    assert any("XYZ-99" in problem and "NOT loaded" in problem for problem in pack.validate())
+    assert pack.unloaded_standards == [("XYZ-99", UNLOADED_OFF_PATTERN)]
+    # An unloaded standard blocks verification: it cannot have reached the network.
+    assert any("XYZ-99" in problem and "NOT loaded" in problem for problem in pack.validate_errors())
 
 
 def test_an_open_variable_missing_its_why_is_reported(tmp_path):

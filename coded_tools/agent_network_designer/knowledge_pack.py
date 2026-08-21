@@ -71,6 +71,23 @@ DEFAULT_STANDARD_ID_PATTERN: str = r"[A-Z][A-Z0-9]*-[0-9.]+"
 # takes that judgement away from the language model and makes it checkable.
 VALID_ROLES: tuple[str, ...] = ("precondition", "work", "postcondition")
 
+# Problem severities. The line between them is deliberate and worth stating once:
+#   ERROR   - the pack cannot be trusted to have delivered its standards, so a network built from
+#             it must not be reported as verified however carefully it was built.
+#   WARNING - the pack is under-specified but its standards are intact. Reported, never blocking,
+#             which is also what keeps a pack written before manifests existed working.
+PROBLEM_ERROR: str = "error"
+PROBLEM_WARNING: str = "warning"
+
+# sly_data key carrying the provenance line of the pack a network was built from, so the
+# generated artifact can state its own ancestry rather than leaving it in a transcript.
+PACK_PROVENANCE: str = "agent_network_pack_provenance"
+
+# Reasons a bullet that reads as a standard was not loaded. Phrased to complete the sentence
+# "<id> reads as a standard but <reason>, so it was NOT loaded."
+UNLOADED_OFF_PATTERN: str = "its id falls outside the pack's declared standard_id_pattern"
+UNLOADED_NO_TEXT: str = "it has no text after the id"
+
 _DOCUMENT_SUFFIXES: tuple[str, ...] = (".md", ".txt", ".pdf")
 _BULLET_RE: re.Pattern = re.compile(r"^\s*[-*]\s+")
 
@@ -217,9 +234,9 @@ class KnowledgePack:
     standards: list[Standard] = field(default_factory=list)
     open_variables: list[OpenVariable] = field(default_factory=list)
     documents: dict[str, str] = field(default_factory=dict)
-    # Ids that look like a standard but that the pack's declared pattern rejected, so they were
-    # never loaded. Kept so validate() can report them rather than let a rule vanish in silence.
-    unmatched_standard_ids: list[str] = field(default_factory=list)
+    # (id, reason) for bullets that read as a standard but were NOT loaded. Kept so validate() can
+    # report them rather than let a rule vanish in silence between the document and the network.
+    unloaded_standards: list[tuple[str, str]] = field(default_factory=list)
 
     @property
     def domain_id(self) -> str:
@@ -238,75 +255,118 @@ class KnowledgePack:
 
     def validate(self) -> list[str]:
         """
-        Check the pack is well formed.
-
-        Returned problems are advisory: the caller decides whether a malformed pack is fatal.
-        Every message names the pack and the offending item so it is actionable without opening
-        the files.
+        Check the pack is well formed, returning every problem regardless of severity.
 
         :return: A list of human-readable problems. Empty means the pack is well formed.
         """
-        problems: list[str] = []
+        return [message for _, message in self._problems()]
+
+    def validate_errors(self) -> list[str]:
+        """
+        Problems that mean the pack cannot be trusted to have delivered its standards.
+
+        These are what gate verification: if a standard was never loaded, loaded twice, or the
+        pack contradicts itself, no amount of correct building can produce a network that carries
+        the pack faithfully, so reporting such a network as verified would be a lie.
+
+        :return: A list of human-readable errors. Empty means nothing blocks verification.
+        """
+        return [message for severity, message in self._problems() if severity == PROBLEM_ERROR]
+
+    def validate_warnings(self) -> list[str]:
+        """
+        Problems that leave the pack usable but under-specified.
+
+        Missing identity or governance metadata, and gaps in the interview script, do not stop a
+        standard reaching the network verbatim. They are reported without failing verification,
+        which is also what keeps a pack written before manifests existed working.
+
+        :return: A list of human-readable warnings. Empty means the pack is fully specified.
+        """
+        return [message for severity, message in self._problems() if severity == PROBLEM_WARNING]
+
+    def _problems(self) -> list[tuple[str, str]]:
+        """
+        Every validation problem as (severity, message), in a stable order.
+
+        Single source of truth for validate(), validate_errors() and validate_warnings(), so a
+        problem cannot be classified one way in one caller and another way in the next.
+
+        :return: A list of (severity, message) pairs.
+        """
         domain: str = self.manifest.domain_id
+        problems: list[tuple[str, str]] = []
 
         if self.manifest.synthesised:
             problems.append(
-                f"{domain}: no {MANIFEST_FILENAME} found - identity and provenance were inferred "
-                f"from the directory name. Add one to record version, owner and approval."
+                (
+                    PROBLEM_WARNING,
+                    f"{domain}: no {MANIFEST_FILENAME} found - identity and provenance were inferred "
+                    f"from the directory name. Add one to record version, owner and approval.",
+                )
             )
         elif not self.manifest.version:
-            problems.append(f"{domain}: {MANIFEST_FILENAME} declares no version.")
+            problems.append((PROBLEM_WARNING, f"{domain}: {MANIFEST_FILENAME} declares no version."))
 
         if not self.standards:
-            problems.append(f"{domain}: no operating standards found in {STANDARDS_FILENAME}.")
+            problems.append((PROBLEM_ERROR, f"{domain}: no operating standards found in {STANDARDS_FILENAME}."))
         if not self.open_variables:
-            problems.append(f"{domain}: no open variables found in {VARIABLES_FILENAME}.")
+            problems.append((PROBLEM_WARNING, f"{domain}: no open variables found in {VARIABLES_FILENAME}."))
 
         problems.extend(self._standard_problems())
         problems.extend(self._open_variable_problems())
         return problems
 
-    def _standard_problems(self) -> list[str]:
+    def _standard_problems(self) -> list[tuple[str, str]]:
         """
         Check the standards: unique ids matching the declared pattern, non-empty text, valid roles.
 
-        :return: A list of human-readable problems. Empty means the standards are well formed.
+        :return: A list of (severity, message) pairs. Empty means the standards are well formed.
         """
-        problems: list[str] = []
+        problems: list[tuple[str, str]] = []
         domain: str = self.manifest.domain_id
 
         try:
             id_pattern: re.Pattern = re.compile(f"^(?:{self.manifest.standard_id_pattern})$")
         except re.error as exception:
-            problems.append(f"{domain}: standard_id_pattern is not a valid regular expression: {exception}")
+            problems.append(
+                (PROBLEM_ERROR, f"{domain}: standard_id_pattern is not a valid regular expression: {exception}")
+            )
             id_pattern = re.compile(f"^(?:{DEFAULT_STANDARD_ID_PATTERN})$")
 
         seen: set[str] = set()
         for standard in self.standards:
             if standard.standard_id in seen:
-                problems.append(f"{domain}: duplicate standard id {standard.standard_id}.")
+                problems.append((PROBLEM_ERROR, f"{domain}: duplicate standard id {standard.standard_id}."))
             seen.add(standard.standard_id)
             if not id_pattern.match(standard.standard_id):
                 problems.append(
-                    f"{domain}: standard id {standard.standard_id} does not match the pack's "
-                    f"declared pattern {self.manifest.standard_id_pattern!r}."
+                    (
+                        PROBLEM_ERROR,
+                        f"{domain}: standard id {standard.standard_id} does not match the pack's "
+                        f"declared pattern {self.manifest.standard_id_pattern!r}.",
+                    )
                 )
             if not standard.text.strip():
-                problems.append(f"{domain}: standard {standard.standard_id} has no text.")
+                problems.append((PROBLEM_ERROR, f"{domain}: standard {standard.standard_id} has no text."))
             if standard.role is not None and standard.role not in VALID_ROLES:
                 problems.append(
-                    f"{domain}: standard {standard.standard_id} declares role {standard.role!r}; "
-                    f"expected one of {', '.join(VALID_ROLES)}."
+                    (
+                        PROBLEM_ERROR,
+                        f"{domain}: standard {standard.standard_id} declares role {standard.role!r}; "
+                        f"expected one of {', '.join(VALID_ROLES)}.",
+                    )
                 )
 
-        # A bullet that reads as a standard but whose id the declared pattern rejects is not parsed
-        # as a standard at all. Left unreported it would vanish between the document and the network,
-        # which is the failure the verifier exists to catch, one link earlier in the chain.
-        for unmatched_id in self.unmatched_standard_ids:
+        # A bullet that reads as a standard but was not loaded - its id falls outside the declared
+        # pattern, or it has no text. Left unreported it would vanish between the document and the
+        # network, which is the failure the verifier exists to catch, one link earlier in the chain.
+        for unloaded_id, reason in self.unloaded_standards:
             problems.append(
-                f"{domain}: {unmatched_id} reads as a standard but does not match the pack's declared "
-                f"pattern {self.manifest.standard_id_pattern!r}, so it was NOT loaded. Fix the id or "
-                f"the pattern."
+                (
+                    PROBLEM_ERROR,
+                    f"{domain}: {unloaded_id} reads as a standard but {reason}, so it was NOT loaded.",
+                )
             )
 
         # A role assigned to an id the pack no longer defines: usually a standard renamed or removed
@@ -314,24 +374,27 @@ class KnowledgePack:
         for declared_id in self.manifest.roles:
             if declared_id not in seen:
                 problems.append(
-                    f"{domain}: {MANIFEST_FILENAME} assigns a role to {declared_id}, which is not "
-                    f"a standard in this pack."
+                    (
+                        PROBLEM_ERROR,
+                        f"{domain}: {MANIFEST_FILENAME} assigns a role to {declared_id}, which is not "
+                        f"a standard in this pack.",
+                    )
                 )
         return problems
 
-    def _open_variable_problems(self) -> list[str]:
+    def _open_variable_problems(self) -> list[tuple[str, str]]:
         """
         Check the open variables: unique ids, and all of question, examples and why present.
 
-        :return: A list of human-readable problems. Empty means the open variables are well formed.
+        :return: A list of (severity, message) pairs. Empty means the open variables are well formed.
         """
-        problems: list[str] = []
+        problems: list[tuple[str, str]] = []
         domain: str = self.manifest.domain_id
 
         variable_ids: set[str] = set()
         for variable in self.open_variables:
             if variable.variable_id in variable_ids:
-                problems.append(f"{domain}: duplicate open variable id {variable.variable_id}.")
+                problems.append((PROBLEM_WARNING, f"{domain}: duplicate open variable id {variable.variable_id}."))
             variable_ids.add(variable.variable_id)
             fields: tuple[tuple[str, str], ...] = (
                 ("question", variable.question),
@@ -340,7 +403,12 @@ class KnowledgePack:
             )
             for label, value in fields:
                 if not value.strip():
-                    problems.append(f"{domain}: open variable {variable.variable_id} is missing its {label}.")
+                    problems.append(
+                        (
+                            PROBLEM_WARNING,
+                            f"{domain}: open variable {variable.variable_id} is missing its {label}.",
+                        )
+                    )
         return problems
 
 
@@ -470,36 +538,40 @@ def parse_standards(text: str, id_pattern: str, roles: dict[str, str] | None = N
     return standards
 
 
-def find_unmatched_standard_ids(text: str, id_pattern: str) -> list[str]:
+def find_unloaded_standards(text: str, id_pattern: str) -> list[tuple[str, str]]:
     """
-    Find bullets that read as a standard but whose id the pack's declared pattern rejects.
+    Find bullets that read as a standard but that parse_standards did not return.
 
-    parse_standards matches on the declared pattern, so a bullet whose id falls outside it is not
-    returned at all - the rule disappears with nothing raised and nothing logged. This finds those
-    bullets using the permissive default pattern, so validate() can report them.
+    parse_standards requires both a matching id and some text, so a bullet failing either is
+    dropped with nothing raised and nothing logged - the rule disappears. This finds those bullets
+    using the permissive default id pattern and an optional body, so validate() can report them.
 
     Only ids of the shape PREFIX-digits are considered, so ordinary prose containing a colon is not
     mistaken for a mis-numbered standard.
 
     :param text: The markdown document text.
     :param id_pattern: The pack's declared standard id pattern.
-    :return: The rejected ids, in document order.
+    :return: (id, reason) pairs for every bullet that was not loaded, in document order.
     """
-    permissive: re.Pattern = re.compile(rf"^({DEFAULT_STANDARD_ID_PATTERN})\s*[:.]\s*(.+)$", re.DOTALL)
+    permissive: re.Pattern = re.compile(rf"^({DEFAULT_STANDARD_ID_PATTERN})\s*[:.]\s*(.*)$", re.DOTALL)
     try:
         declared: re.Pattern = re.compile(f"^(?:{id_pattern})$")
     except re.error:
-        return []
+        # An unparseable pattern is reported by validate() in its own right; parsing fell back to
+        # the default, so nothing here was dropped for pattern reasons.
+        declared = re.compile(f"^(?:{DEFAULT_STANDARD_ID_PATTERN})$")
 
-    unmatched: list[str] = []
+    unloaded: list[tuple[str, str]] = []
     for bullet in _iter_bullets(text):
         match: re.Match | None = permissive.match(bullet.strip())
         if match is None:
             continue
         candidate: str = match.group(1).strip()
         if not declared.match(candidate):
-            unmatched.append(candidate)
-    return unmatched
+            unloaded.append((candidate, UNLOADED_OFF_PATTERN))
+        elif not match.group(2).strip():
+            unloaded.append((candidate, UNLOADED_NO_TEXT))
+    return unloaded
 
 
 def parse_open_variables(text: str) -> list[OpenVariable]:
@@ -610,7 +682,7 @@ def load_pack(domain_id: str, root: str | os.PathLike | None = None) -> Knowledg
         standards=parse_standards(standards_text, manifest.standard_id_pattern, manifest.roles),
         open_variables=parse_open_variables(documents.get(VARIABLES_FILENAME, "")),
         documents=documents,
-        unmatched_standard_ids=find_unmatched_standard_ids(standards_text, manifest.standard_id_pattern),
+        unloaded_standards=find_unloaded_standards(standards_text, manifest.standard_id_pattern),
     )
 
 

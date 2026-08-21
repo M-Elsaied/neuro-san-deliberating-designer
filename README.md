@@ -114,10 +114,11 @@ and the claim fails.
    *survived into the artifact*, verbatim and attributed. It cannot make the generated network obey its own
    `MUST` once that network runs - that needs deterministic tooling in the built agents themselves.
    Verification is also advisory by default: it reports, and the network is still written.
-2. **A valid pack is not a correct pack.** A manifest and `validate()` catch malformed packs - duplicate
-   ids, ids outside the declared pattern, a missing `why` - and provenance records who owns and approved
-   one. Nothing checks that what a pack *says* is right, so a well-formed wrong pack still yields an
-   authoritative-looking wrong network. Approval remains a recorded field, not a workflow.
+2. **A valid pack is not a correct pack.** A manifest and `validate()` catch malformed packs -
+   duplicate ids, ids outside the declared pattern, a standard with no text, a missing `why` - and the
+   pack's provenance is stamped into the generated network's `metadata`. Nothing checks that what a
+   pack *says* is right, so a well-formed wrong pack still yields an authoritative-looking wrong
+   network. Approval remains a recorded field, not a workflow.
 3. **Intent matching is an unsolved classifier.** Matching the *wrong* domain is worse than matching none,
    and nothing resolves the case where two domains both apply.
 4. **The meta-model favours runbook-shaped work.** Sequential, gate-heavy processes fit well; optimisation,
@@ -175,7 +176,8 @@ still interview you. Inventing confident standards is a failure.
 
 ### Check the artifact, not the chat
 
-Verify a generated network against its pack - no language model, no API key, exit code 0 or 1:
+The generated file records the pack it came from in its own `metadata.knowledge_pack`. To check the
+standards actually survived into it - no language model, no API key, exit code 0 or 1:
 
 ```bash
 ls registries/generated/

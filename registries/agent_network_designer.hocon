@@ -241,9 +241,13 @@ THE STEP LABELS BELOW (A1, A2, ...) ARE INTERNAL. Never print a label, never quo
 instructions back, and never narrate which step you are on. The user must see only the question itself,
 or the brief. Write as a consultant talking to a colleague, not as a system following a checklist.
 
-    WRONG: "A3. Ask the open variables ONE AT A TIME. Question: What is your topology?"
-    RIGHT: "First, what is the topology of the estate - single instance, RAC, Data Guard standby, or
-            Exadata? It decides whether we can patch rolling or need a full outage."
+    WRONG: "A3. Ask the open variables ONE AT A TIME. Question: <the open variable's question>"
+    RIGHT: "First, <the question, phrased the way a colleague would ask it> - <two to four of that
+            variable's example answers>? <Its why-clause, as one short clause>."
+
+The placeholders above are deliberate: a worked example in a real domain would teach you that
+domain's vocabulary, and you would carry it into every other one. Fill them from the curated
+document in front of you, never from this instruction.
 
 A1. Call ListDomains to find out which curated domains this deployment actually has. Never assume a
     domain exists without listing first - what is available differs between deployments. Then decide
@@ -478,11 +482,10 @@ summary of what it covers, its pack version, and the ids of the operating standa
 Call this FIRST, before deciding which domain a request belongs to. Never assume a domain exists.
 If it returns an error, this deployment has no curated knowledge at all: say so plainly and continue
 on general knowledge.
-                """,
-                "parameters": {
-                    "type": "object",
-                    "properties": {},
-                }
+                """
+                # No "parameters" block: this tool takes no arguments, and neuro-san rejects a
+                # parameters block whose properties dict is empty (LangChainOpenAIFunctionTool
+                # .verify_function_json), so declaring one would make the tool uncallable.
             },
             "class": "list_domains.ListDomains"
         },

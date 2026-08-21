@@ -58,8 +58,6 @@ class VerifyStandards(CodedTool):
             - "app_name" (str): the curated domain the network was designed for.
             - "strict" (bool, optional): when true, a failed verification is returned as an
               error string rather than a report. Defaults to false.
-            - "agent_network_definition" (dict, optional): the network to check. Normally
-              omitted, in which case it is read from sly_data.
 
         :param sly_data: A dictionary whose keys are defined by the agent hierarchy, but whose
             values are meant to be kept out of the chat stream.
@@ -75,7 +73,8 @@ class VerifyStandards(CodedTool):
                 - "provenance" (str): the pack's identity, version and owner.
                 - "report" (str): a markdown coverage table, ready to print verbatim.
                 - "problems" (list): every failure, as human-readable lines.
-                - "pack_problems" (list): warnings about the pack itself.
+                - "pack_errors" (list): pack faults that block verification.
+                - "pack_warnings" (list): pack faults that do not block verification.
             Otherwise:
                 A text string error message in the format:
                 "Error: <error message>"
@@ -86,7 +85,11 @@ class VerifyStandards(CodedTool):
         if not domain_id:
             return f"Error: No domain provided to verify against. Available curated domains: {available}"
 
-        network_definition: Any = args.get(AGENT_NETWORK_DEFINITION) or (sly_data or {}).get(AGENT_NETWORK_DEFINITION)
+        # The network under audit is read ONLY from sly_data, which the middleware maintains.
+        # It is deliberately not accepted from args: args is what the model sends, and letting the
+        # audited party hand the auditor the artifact to audit would reinstate exactly the
+        # self-certification this tool exists to remove.
+        network_definition: Any = (sly_data or {}).get(AGENT_NETWORK_DEFINITION)
         if not isinstance(network_definition, dict) or not network_definition:
             return (
                 "Error: No agent network definition is available to verify. "
@@ -111,7 +114,8 @@ class VerifyStandards(CodedTool):
             "provenance": result.provenance,
             "report": report,
             "problems": result.problems(),
-            "pack_problems": result.pack_problems,
+            "pack_errors": result.pack_errors,
+            "pack_warnings": result.pack_warnings,
         }
 
     async def async_invoke(self, args: dict[str, Any], sly_data: dict[str, Any]) -> dict[str, Any] | str:

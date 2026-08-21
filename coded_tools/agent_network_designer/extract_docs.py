@@ -36,6 +36,7 @@ from typing import Any
 
 from neuro_san.interfaces.coded_tool import CodedTool
 
+from coded_tools.agent_network_designer.knowledge_pack import PACK_PROVENANCE
 from coded_tools.agent_network_designer.knowledge_pack import KnowledgePack
 from coded_tools.agent_network_designer.knowledge_pack import discover_domains
 from coded_tools.agent_network_designer.knowledge_pack import knowdocs_root
@@ -93,6 +94,12 @@ class ExtractDocs(CodedTool):
 
         for problem in pack.validate():
             logger.warning("Knowledge pack problem: %s", problem)
+
+        # Record what this network is being built from, so the persistence layer can stamp it into
+        # the generated artifact. Without this the provenance lives only in a chat transcript, and
+        # the file on disk is of unknown ancestry - which is the thing a manifest exists to fix.
+        if sly_data is not None:
+            sly_data[PACK_PROVENANCE] = pack.manifest.provenance()
 
         logger.debug("############### Documents extraction done ###############")
         return {

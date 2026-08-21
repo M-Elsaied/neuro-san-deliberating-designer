@@ -137,9 +137,39 @@ work.
 | **Fidelity** | Embedded text matches the pack text. Re-wrapping and typography are tolerated; a changed word is not. |
 | **Provenance** | Every embedded id exists in the pack. Nothing was invented. |
 | **Structure** | Where roles are declared, no single agent owns both a precondition and the work it guards. |
+| **Pack** | The pack itself loaded soundly. A standard that never loaded cannot have reached the network. |
 
 Failures are reported, not raised — a network covering five of six standards with one flagged is more
 useful than an exception. Pass `strict` to make a failure an error instead.
+
+### Errors and warnings
+
+Pack problems come in two severities, and the line between them decides whether verification fails:
+
+- **Errors** mean the pack cannot be trusted to have delivered its standards — an id outside the
+  declared pattern, a standard with no text, a duplicate id, a role pointing at a standard that no
+  longer exists. Any of these and a standard is missing or ambiguous *before the build even starts*,
+  so however carefully the network was assembled it cannot carry the pack. These fail verification.
+- **Warnings** mean the pack is under-specified but its standards are intact — no `pack.hocon`, no
+  `version`, an open variable missing its `why`. Reported, never blocking. This is also what keeps a
+  pack written before manifests existed working.
+
+## Provenance in the generated network
+
+Once a network is built from a pack, the pack's provenance line is written into the network's own
+`metadata`, next to `date_created`:
+
+```hocon
+    "metadata": {
+        "sample_queries": [ ... ],
+        "date_created": "2026-08-21T09:14:02+00:00",
+        "knowledge_pack": "Oracle database patching, v1.0.0, owned by Database Engineering"
+    },
+```
+
+So the artifact states its own ancestry rather than leaving it in a chat transcript. Networks built
+without a pack simply have no `knowledge_pack` key, rather than an empty one that would read as
+"source unknown".
 
 ### Running it yourself
 

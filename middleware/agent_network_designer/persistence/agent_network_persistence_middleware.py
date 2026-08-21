@@ -26,6 +26,7 @@ from langgraph.runtime import Runtime
 from neuro_san.interfaces.reservationist import Reservationist
 from neuro_san.internals.validation.network.unreachable_nodes_network_validator import UnreachableNodesNetworkValidator
 
+from coded_tools.agent_network_designer.knowledge_pack import PACK_PROVENANCE
 from coded_tools.agent_network_editor.and_logger import AndLogger
 from coded_tools.agent_network_editor.connectivity_dictionary_converter import ConnectivityDictionaryConverter
 from coded_tools.agent_network_editor.constants import AGENT_NETWORK_DEFINITION
@@ -274,9 +275,13 @@ class AgentNetworkPersistenceMiddleware(AgentMiddleware):
         )
         top_agent_name: str = UnreachableNodesNetworkValidator().find_all_front_man_agents(network_def).pop()
 
+        # Provenance of the curated knowledge pack this network was designed from, recorded by
+        # ExtractDocs. Empty for networks built without a pack, in which case nothing is stamped.
+        pack_provenance: str = self.sly_data.get(PACK_PROVENANCE) or ""
+
         # Always assemble and store HOCON content for client consumption.
         persisted_content: str = await HoconAgentNetworkAssembler(DEMO_MODE).assemble_agent_network(
-            network_def, top_agent_name, agent_network_name, sample_queries
+            network_def, top_agent_name, agent_network_name, sample_queries, pack_provenance=pack_provenance
         )
         self.logger.info("The resulting agent network content: \n %s", persisted_content)
         self.sly_data[AGENT_NETWORK_HOCON_TEXT] = persisted_content
@@ -291,7 +296,7 @@ class AgentNetworkPersistenceMiddleware(AgentMiddleware):
             assembler: AgentNetworkAssembler = persistor.get_assembler()
             # The persisted content for reservations is config.
             persisted_content: dict[str, Any] = await assembler.assemble_agent_network(
-                network_def, top_agent_name, agent_network_name, sample_queries
+                network_def, top_agent_name, agent_network_name, sample_queries, pack_provenance=pack_provenance
             )
         # Persist the agent network
         persisted_reference: str | list[dict[str, Any]] = await persistor.async_persist(

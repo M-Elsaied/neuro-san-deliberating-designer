@@ -23,8 +23,17 @@ class AgentNetworkAssembler:
     Interface for a policy class that assembles an agent network from an agent network definition
     """
 
+    # pack_provenance is keyword-only and optional, so this stays a four-argument call for
+    # every existing caller; the count is what pylint objects to, not the signature.
+    # pylint: disable=too-many-arguments
     async def assemble_agent_network(
-        self, network_def: dict[str, Any], top_agent_name: str, agent_network_name: str, sample_queries: list[str]
+        self,
+        network_def: dict[str, Any],
+        top_agent_name: str,
+        agent_network_name: str,
+        sample_queries: list[str],
+        *,
+        pack_provenance: str = "",
     ) -> Any:
         """
         Assemble the agent network from the definition.
@@ -33,6 +42,9 @@ class AgentNetworkAssembler:
         :param top_agent_name: The name of the top agent
         :param agent_network_name: The file name, without the .hocon extension
         :param sample_queries: List of sample queries for the agent network
+        :param pack_provenance: Optional provenance line for the curated knowledge pack this
+                network was designed from, recorded in the network's metadata so the artifact
+                states its own ancestry. Empty when the network was not built from a pack.
 
         :return: Some representation of the agent network
         """
