@@ -79,7 +79,7 @@ def test_the_shipped_packs_validate_from_the_command_line(capsys):
     assert main(["validate", "--all"]) == EXIT_OK
     output: str = capsys.readouterr().out
     assert "oracle_database_patching" in output
-    assert "are usable" in output
+    assert "usable" in output
 
 
 def test_a_prose_document_is_told_what_shape_a_standard_takes(tmp_path, capsys):
@@ -203,3 +203,17 @@ def test_every_problem_a_malformed_pack_can_produce_has_advice(tmp_path):
                 unexplained.append(problem)
 
     assert not unexplained, "validation messages with no guidance:\n  " + "\n  ".join(unexplained)
+
+
+def test_counts_read_grammatically_in_the_singular(tmp_path, capsys):
+    """
+    "1 packs" is a small thing that says nobody proof-read the message telling a domain expert
+    their document is wrong. Pinned because the counts are assembled in five separate places.
+    """
+    write_pack(tmp_path, "only_one", "- OO-01: A rule.\n", "- V1 | q | examples: e | why: w\n")
+
+    main(["validate", "--all", "--knowdocs", str(tmp_path)])
+    output: str = capsys.readouterr().out
+
+    assert "1 pack " in output or "1 pack\n" in output or "1 pack." in output
+    assert "1 packs" not in output

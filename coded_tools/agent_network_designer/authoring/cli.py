@@ -30,6 +30,7 @@ Nothing here needs a language model, an API key or a running server.
 import argparse
 import sys
 
+from coded_tools.agent_network_designer.authoring.report import plural
 from coded_tools.agent_network_designer.authoring.report import render_pack_report
 from coded_tools.agent_network_designer.authoring.report import render_summary
 from coded_tools.agent_network_designer.knowledge_pack import KnowledgePack
@@ -82,7 +83,7 @@ def validate_command(arguments: argparse.Namespace) -> int:
         if not packs:
             print(f"No knowledge packs found under {knowdocs_root(root)}", file=sys.stderr)
             return EXIT_USAGE
-        print(f"Checking {len(packs)} packs in {knowdocs_root(root)}\n")
+        print(f"Checking {plural(len(packs), 'pack')} in {knowdocs_root(root)}\n")
         print(render_summary(packs))
     else:
         try:
@@ -102,15 +103,15 @@ def validate_command(arguments: argparse.Namespace) -> int:
 
     print()
     if unusable:
-        print(f"{len(unusable)} of {len(packs)} packs cannot be used yet.")
+        print(f"{len(unusable)} of {plural(len(packs), 'pack')} cannot be used yet.")
         return EXIT_PROBLEM
     if arguments.strict and warned:
-        print(f"{len(warned)} of {len(packs)} packs are incomplete, and --strict was given.")
+        print(f"{len(warned)} of {plural(len(packs), 'pack')} incomplete, and --strict was given.")
         return EXIT_PROBLEM
     if warned:
-        print(f"All {len(packs)} packs are usable. {len(warned)} could be more complete (marked OK*).")
+        print(f"All {plural(len(packs), 'pack')} usable. {len(warned)} could be more complete (marked OK*).")
         return EXIT_OK
-    print(f"All {len(packs)} packs are usable.")
+    print(f"All {plural(len(packs), 'pack')} usable.")
     return EXIT_OK
 
 

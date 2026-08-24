@@ -206,16 +206,22 @@ def render_summary(packs: list[KnowledgePack]) -> str:
         else:
             state = "OK"
         detail: str = (
-            f"{_plural(len(pack.standards), 'standard')}, "
-            f"{_plural(len(pack.open_variables), 'question')}, "
+            f"{plural(len(pack.standards), 'standard')}, "
+            f"{plural(len(pack.open_variables), 'question')}, "
             f"v{pack.manifest.version or '?'}"
         )
         lines.append(f"  {pack.domain_id:<34} {state:<8} {detail}")
     return "\n".join(lines)
 
 
-def _plural(count: int, noun: str) -> str:
+def plural(count: int, noun: str) -> str:
     """
+    Render a count with its noun, singular or plural.
+
+    Public because the command line needs the same courtesy as the report it prints. These messages
+    are read by domain experts, and "1 packs" is a small but real signal that nobody proof-read the
+    thing telling them their document is wrong.
+
     :param count: How many.
     :param noun: The singular noun.
     :return: For example "1 standard" or "6 standards".
