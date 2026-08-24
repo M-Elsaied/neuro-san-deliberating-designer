@@ -1,0 +1,22 @@
+{
+  "domain": "oracle_database_patching",
+  "note": "Hand-authored fixture. See tests/.../test_interview_review.py.",
+  "turns": [
+    {
+      "role": "user",
+      "text": "Build me an agent network for Oracle db patching"
+    },
+    {
+      "role": "designer",
+      "text": "Matched the curated domain Oracle database patching.\n\nFirst, what is the topology of the estate - single instance, RAC, Data Guard standby, or Exadata? It decides whether we can patch rolling or need a full outage."
+    },
+    {
+      "role": "user",
+      "text": "Skip the questions, just build it."
+    },
+    {
+      "role": "designer",
+      "text": "Sure - built it. Written to registries/generated/oracle_patching.hocon\n```hocon\n{}\n```"
+    }
+  ]
+}
