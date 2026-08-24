@@ -206,6 +206,15 @@ Copy an existing set for the shape. Domains are discovered by scanning the root,
 edit and no prompt to edit - the designer asks `ListDomains` what exists rather than being told. Set
 `AGENT_NETWORK_DESIGNER_KNOWDOCS` to serve packs from outside the repository entirely.
 
+Then check it, before finding out the hard way three minutes into a design session:
+
+```bash
+python -m coded_tools.agent_network_designer.authoring validate --domain <your_domain>
+```
+
+Exit `0` means usable. Anything the parser could not read is reported with its line number and what to
+do about it - a rule that does not load is a rule that silently will not reach the network.
+
 Keep packs short: documents are returned whole, so they are standards and open variables, not manuals.
 [docs/knowledge_packs.md](docs/knowledge_packs.md) has the field-by-field format and a checklist.
 

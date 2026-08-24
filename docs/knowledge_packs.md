@@ -230,14 +230,26 @@ Exit code `0` if the network verifies clean, `1` if it does not, `2` on a usage 
 2. Write `operating_standards.md` — short, invariant, each rule with a stable id.
 3. Write `open_variables.md` — only what the requester alone can answer, each with its why.
 4. Write `pack.hocon` — version and owner at minimum, plus your id pattern if it is not `ABC-01`.
-5. Confirm it loads and validates:
+5. Check it:
 
-   ```python
-   from coded_tools.agent_network_designer.knowledge_pack import load_pack
-   print(load_pack("your_domain").validate())   # [] means clean
+   ```bash
+   python -m coded_tools.agent_network_designer.authoring validate --domain your_domain
    ```
+
+   Exit `0` means usable. Anything wrong is reported with the line it is on and what to do about
+   it. Add `--strict` if an incomplete `pack.hocon` should also count as a failure.
 
 6. Ask the designer to build something in your domain, and read the verified coverage table.
 
 No step edits Python or the designer's prompt. If one did, this would be an example rather than an
 extension point.
+
+### Checking every pack at once
+
+```bash
+python -m coded_tools.agent_network_designer.authoring validate --all
+```
+
+One line per pack — `OK`, `OK*` for usable but under-specified, `PROBLEM` for unusable — then the
+detail for anything that needs attention. This is also what CI runs, so a malformed pack anywhere
+under the knowdocs root fails the build rather than surfacing three minutes into a design session.
