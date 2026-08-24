@@ -287,3 +287,52 @@ The recurring costs, named:
 
 What is deliberately *not* in CI: the extractor. It needs a model and an API key, so it runs when
 an author runs it and never on a build.
+
+---
+
+## Auditing an estate of generated networks
+
+Verification is a moment-in-time check: it answers *"does this network carry its pack faithfully?"*
+as the network is built. Packs then change — a standard is reworded, a control is added, a version
+is cut — and every network built before that change quietly stops implementing the document it
+claims to. In a regulated context an out-of-date control is the whole problem, not an edge case.
+
+```bash
+python -m coded_tools.agent_network_designer.network_audit registries/generated/
+```
+
+```text
+| Network                        | Pack                       | Built at | Pack now | Status   |
+| exadata_oracle_patching.hocon  | oracle_database_patching   | -        | v1.0.0   | unstamped|
+| kubeadm_cluster_upgrade.hocon  | kubernetes_cluster_upgrade  | v1.0.0   | v1.2.0   | **stale**|
+```
+
+| Status | Meaning |
+|---|---|
+| `current` | Built from this pack version, and every standard still matches |
+| `stale` | The pack has moved on since this network was built |
+| `drifted` | A standard's **text** no longer matches, whatever the version says |
+| `unstamped` | Predates provenance stamping. Reported, not flagged — its standards may be fine |
+| `unknown pack` | Embeds ids belonging to no pack on this deployment |
+| `no standards` | Carries no `MUST: … [id]` lines at all, so nothing is traceable |
+
+`drifted` is the one that earns its keep. Someone edits a standard's wording and does not bump the
+version — the most likely way for an estate to go quietly out of date — and a version comparison
+would call that network current. The text comparison does not, and it names the standard.
+
+Exit code `0` when nothing needs attention, `1` when something does, so this runs as a scheduled
+check rather than by eye.
+
+### Traceability
+
+The question an auditor actually asks — *show me everything that implements this rule*:
+
+```bash
+python -m coded_tools.agent_network_designer.network_audit registries/generated/ --standard ODB-03
+python -m coded_tools.agent_network_designer.network_audit registries/generated/ --pack oracle_database_patching
+```
+
+A network is matched to its pack by **the standard ids it embeds**, not by its metadata. That is
+deliberate: it needs no parsing of a human-readable provenance line, it works on networks generated
+before provenance stamping existed, and it cannot be fooled by metadata that says one thing while
+the instructions say another — which is exactly the discrepancy an audit is for.
