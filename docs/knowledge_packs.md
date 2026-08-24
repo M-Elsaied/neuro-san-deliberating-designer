@@ -253,3 +253,37 @@ python -m coded_tools.agent_network_designer.authoring validate --all
 One line per pack — `OK`, `OK*` for usable but under-specified, `PROBLEM` for unusable — then the
 detail for anything that needs attention. This is also what CI runs, so a malformed pack anywhere
 under the knowdocs root fails the build rather than surfacing three minutes into a design session.
+
+---
+
+## What this costs to maintain
+
+Verification is deterministic, so it costs nothing per run — no model, no key, no network. The
+things it checks *against*, though, do cost something to keep current, and that is worth stating
+rather than discovering later.
+
+Measured on this repository:
+
+| | |
+|---|---|
+| Designer unit tests | 161 passing, ~2s, no model |
+| `make validate-packs` | one cached catalogue load, ~0.6ms plus process startup |
+| `pymarkdown` over `knowdocs/` | 0 findings |
+
+The recurring costs, named:
+
+- **Adding a pack to this repository** means adding one line to
+  `tests/coded_tools/agent_network_designer/shipped_packs.py`. Deliberate: a pack appearing on disk
+  with nobody noticing is how a malformed one used to reach a green build.
+- **Every pack present is validated by CI**, including a deployment's own. A malformed pack is a
+  red build rather than a surprise three minutes into a design session. That is the point, and it
+  does mean a half-finished pack cannot sit in the tree.
+- **Pack markdown is linted** with the same rules as the rest of the documentation.
+- **Editing a standard's wording** is free as far as the tests are concerned — the reference
+  networks used by the scenario benchmark are derived from the pack itself, so a new or changed
+  domain brings its own coverage rather than needing a hand-written fixture.
+- **Changing a standard's id or role** does need the manifest kept in step. `validate` reports the
+  mismatch, and it is the one edit that reliably requires touching two files.
+
+What is deliberately *not* in CI: the extractor. It needs a model and an API key, so it runs when
+an author runs it and never on a build.

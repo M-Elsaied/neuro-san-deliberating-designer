@@ -37,12 +37,8 @@ from coded_tools.agent_network_designer.pack_catalogue import catalogue_fingerpr
 from coded_tools.agent_network_designer.pack_catalogue import discover_domains
 from coded_tools.agent_network_designer.pack_catalogue import load_catalogue
 from coded_tools.agent_network_designer.pack_catalogue import load_pack
-
-SHIPPED_DOMAINS: tuple[str, ...] = (
-    "clinical_trial_database_lock",
-    "kubernetes_cluster_upgrade",
-    "oracle_database_patching",
-)
+from tests.coded_tools.agent_network_designer.shipped_packs import SHIPPED_DOMAINS
+from tests.coded_tools.agent_network_designer.shipped_packs import present_domains
 
 
 def write_pack(
@@ -77,8 +73,14 @@ def write_pack(
 
 
 def test_shipped_domains_are_discovered_without_being_registered_in_python():
-    """Adding a domain must be a filesystem operation, not a code change."""
-    assert set(SHIPPED_DOMAINS).issubset(set(discover_domains()))
+    """
+    Adding a domain must be a filesystem operation, not a code change.
+
+    Set equality, not a subset. A subset check let an extra pack appear on disk with nobody
+    noticing - which is exactly how a malformed pack used to reach a green build. Adding a pack to
+    this repository is now a deliberate act: it has to be listed in shipped_packs.py too.
+    """
+    assert set(discover_domains()) == set(SHIPPED_DOMAINS)
 
 
 def test_default_root_is_relative_to_the_module_not_the_working_directory(tmp_path, monkeypatch):
@@ -121,8 +123,8 @@ def test_unknown_domain_raises_rather_than_falling_back(tmp_path):
 # --------------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("domain_id", SHIPPED_DOMAINS)
-def test_every_shipped_pack_parses_and_validates_clean(domain_id):
+@pytest.mark.parametrize("domain_id", present_domains())
+def test_every_pack_present_parses_and_validates_clean(domain_id):
     """The packs that ship must satisfy the contract they define."""
     pack: KnowledgePack = load_pack(domain_id)
     assert pack.standards, f"{domain_id} parsed no standards"

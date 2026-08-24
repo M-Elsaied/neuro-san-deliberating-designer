@@ -44,12 +44,7 @@ from coded_tools.agent_network_designer.standards_verifier import verify
 from tests.coded_tools.agent_network_designer.network_fixtures import MUTATIONS
 from tests.coded_tools.agent_network_designer.network_fixtures import Mutation
 from tests.coded_tools.agent_network_designer.network_fixtures import reference_network
-
-SHIPPED_DOMAINS: tuple[str, ...] = (
-    "clinical_trial_database_lock",
-    "kubernetes_cluster_upgrade",
-    "oracle_database_patching",
-)
+from tests.coded_tools.agent_network_designer.shipped_packs import SHIPPED_DOMAINS
 
 
 def _has_work_role(pack: KnowledgePack) -> bool:
