@@ -40,6 +40,45 @@ export AGENT_NETWORK_DESIGNER_KNOWDOCS=/srv/agent-knowledge/packs
 
 ---
 
+## Scale: what this handles, and where it stops
+
+Packs are read once per process, not once per tool call. Measured on the three shipped packs:
+
+| | Before | After |
+|---|---|---|
+| `load_catalogue()` | 19.8 ms, every call | 0.6 ms warm (46x) |
+| Where that ran | on the event loop | in a worker thread on a miss |
+
+Freshness is a full walk of the knowdocs root, capturing each document's modification time. That
+walk *is* the 0.6 ms, and it is the whole warm cost. It is deliberately the most expensive probe
+available: it means an edited pack is picked up with no restart, no TTL to tune and no staleness
+window. A cache that could serve a stale pack would be worse than no cache, because the designer
+and the verifier read the same copy — they would agree with each other about a document that had
+already changed.
+
+**The ceiling is the prompt, not the filesystem.** `ListDomains` returns every domain, and that
+payload then sits in context for the rest of the conversation:
+
+| Domains | Catalogue payload |
+|---|---|
+| 10 | ~2,700 chars (~680 tokens) |
+| 50 | ~13,600 chars (~3,400 tokens) |
+| 200 | ~54,600 chars (~13,700 tokens) |
+
+Reporting a standard *count* per domain rather than the full id list took this from 330 to 273
+characters per domain — a fifth off a term that is still linear in the number of domains. Caching
+removes repeated work; it does not remove that. Somewhere past a few dozen domains, "list
+everything and let the model choose" stops being a catalogue and becomes a retrieval problem.
+
+**Where a retrieval layer would go.** `ListDomains` and `ExtractDocs` are a two-call seam: *choose
+a domain from a catalogue*, then *fetch that domain whole*. Replacing the bodies of those two
+coded tools — `ListDomains` becoming a query against an index, `ExtractDocs` a fetch by id — is
+sufficient to put a retrieval or MCP-backed knowledge layer underneath, and it changes neither the
+designer's prompt, nor the pack format, nor `standards_verifier.py`, which compares against a
+loaded pack regardless of where that pack came from. That is deliberately not built here.
+
+---
+
 ## `operating_standards.md`
 
 One bullet per standard: an id, a colon, then the rule. Wrap freely across lines — continuations are

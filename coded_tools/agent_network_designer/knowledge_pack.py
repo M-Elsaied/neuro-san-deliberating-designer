@@ -96,6 +96,9 @@ UNLOADED_NOT_A_BULLET: str = "it is not written as a markdown bullet starting wi
 EXPECTED_STANDARD_SHAPE: str = "- <ID>: <the rule, word for word>"
 
 _DOCUMENT_SUFFIXES: tuple[str, ...] = (".md", ".txt", ".pdf")
+# Documents plus the manifest: everything a loaded pack is built from, and therefore everything
+# whose modification has to invalidate the cached catalogue.
+_FINGERPRINTED_SUFFIXES: tuple[str, ...] = _DOCUMENT_SUFFIXES + (".hocon",)
 _BULLET_RE: re.Pattern = re.compile(r"^\s*[-*]\s+")
 # A numbered-list prefix, stripped before looking for an id so "1. ABC-01: text" is recognised
 # as an attempt at a standard rather than passing as prose.
@@ -521,12 +524,12 @@ def knowdocs_root(root: str | os.PathLike | None = None) -> Path:
     return DEFAULT_KNOWDOCS_ROOT
 
 
-def discover_domains(root: str | os.PathLike | None = None) -> list[str]:
+def read_domains(root: str | os.PathLike | None = None) -> list[str]:
     """
-    List the domains available under the knowdocs root.
+    Walk the knowdocs root for domain directories.
 
-    A domain is any immediate subdirectory holding at least one readable document. Nothing is
-    registered in Python, so adding a domain is a filesystem operation: no code change, no fork.
+    Reads the filesystem every call. Callers wanting the cached catalogue should use
+    pack_catalogue.discover_domains instead.
 
     :param root: The knowdocs root, or None to resolve it.
     :return: Sorted domain identifiers.
@@ -833,9 +836,12 @@ def _read_pdf(path: Path) -> str:
         return f"ERROR: Error reading PDF {path}: {exception}"
 
 
-def load_pack(domain_id: str, root: str | os.PathLike | None = None) -> KnowledgePack:
+def read_pack(domain_id: str, root: str | os.PathLike | None = None) -> KnowledgePack:
     """
-    Load one pack by domain identifier.
+    Read one pack from disk.
+
+    Reads every document every call. Callers wanting the cached catalogue should use
+    pack_catalogue.load_pack instead.
 
     :param domain_id: The domain identifier - the pack's directory name.
     :param root: The knowdocs root, or None to resolve it.
@@ -858,19 +864,3 @@ def load_pack(domain_id: str, root: str | os.PathLike | None = None) -> Knowledg
         unloaded_standards=find_unloaded_standards(standards_text, manifest.standard_id_pattern),
         unaccounted_lines=find_unaccounted_lines(standards_text),
     )
-
-
-def load_catalogue(root: str | os.PathLike | None = None) -> list[KnowledgePack]:
-    """
-    Load every discoverable pack.
-
-    :param root: The knowdocs root, or None to resolve it.
-    :return: The loaded packs, ordered by domain id.
-    """
-    packs: list[KnowledgePack] = []
-    for domain_id in discover_domains(root):
-        try:
-            packs.append(load_pack(domain_id, root))
-        except (FileNotFoundError, OSError):
-            continue
-    return packs

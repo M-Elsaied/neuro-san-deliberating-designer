@@ -130,6 +130,20 @@ class ProcessGlobals:  # pylint: disable=too-few-public-methods
     #             publishing, so recovery stays possible.
     #    Used by: GetMcpTool.async_invoke() (the coded tool the editor LLM
     #             calls).
+    #
+    # 7. Curated knowledge-pack catalogue
+    #    Holds:   the {domain id: KnowledgePack} mapping parsed from the
+    #             knowdocs root - manifests, standards, open variables and
+    #             every document body, including extracted PDF text.
+    #    Lives:   agent_network_designer.knowledge_pack.PackCatalogue
+    #    Expiry:  any change to the resolved knowdocs root, or to the path
+    #             or modification time of any document or pack.hocon
+    #             beneath it. A full walk rather than a TTL: it costs about
+    #             2% of a cold load and in exchange an edited pack is
+    #             picked up with no restart and no staleness window.
+    #    Used by: ListDomains.async_invoke(), ExtractDocs.async_invoke() and
+    #             VerifyStandards.async_invoke() (the coded tools the
+    #             designer LLM calls), plus the standards_verifier CLI.
     # -----------------------------------------------------------------------
 
     # Machine-readable registry of the entries above, as
@@ -165,6 +179,11 @@ class ProcessGlobals:  # pylint: disable=too-few-public-methods
             "coded_tools.agent_network_editor.get_mcp_tool",
             "GetMcpTool",
             "clear_shared_mcp_tool_descriptions_for_testing",
+        ),
+        (
+            "coded_tools.agent_network_designer.pack_catalogue",
+            "PackCatalogue",
+            "clear_shared_catalogue_for_testing",
         ),
     ]
 

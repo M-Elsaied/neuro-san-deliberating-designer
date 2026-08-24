@@ -20,6 +20,7 @@ Unit tests for knowledge pack discovery, parsing and validation.
 No language model, no network, no agent runtime: these run in ordinary CI.
 """
 
+import time
 from pathlib import Path
 
 import pytest
@@ -27,13 +28,15 @@ import pytest
 from coded_tools.agent_network_designer.knowledge_pack import KNOWDOCS_ENV_VAR
 from coded_tools.agent_network_designer.knowledge_pack import UNLOADED_OFF_PATTERN
 from coded_tools.agent_network_designer.knowledge_pack import KnowledgePack
-from coded_tools.agent_network_designer.knowledge_pack import discover_domains
 from coded_tools.agent_network_designer.knowledge_pack import knowdocs_root
-from coded_tools.agent_network_designer.knowledge_pack import load_catalogue
-from coded_tools.agent_network_designer.knowledge_pack import load_pack
 from coded_tools.agent_network_designer.knowledge_pack import normalise
 from coded_tools.agent_network_designer.knowledge_pack import parse_open_variables
 from coded_tools.agent_network_designer.knowledge_pack import parse_standards
+from coded_tools.agent_network_designer.pack_catalogue import PackCatalogue
+from coded_tools.agent_network_designer.pack_catalogue import catalogue_fingerprint
+from coded_tools.agent_network_designer.pack_catalogue import discover_domains
+from coded_tools.agent_network_designer.pack_catalogue import load_catalogue
+from coded_tools.agent_network_designer.pack_catalogue import load_pack
 
 SHIPPED_DOMAINS: tuple[str, ...] = (
     "clinical_trial_database_lock",
@@ -347,3 +350,111 @@ def test_normalise_collapses_wrapping_and_typography():
 def test_normalise_handles_empty_input():
     """Guards the fidelity comparison against an agent with no instructions."""
     assert normalise("") == ""
+
+
+# --------------------------------------------------------------------------------------
+# The process-wide catalogue cache
+# --------------------------------------------------------------------------------------
+
+
+def test_the_catalogue_is_served_from_cache_on_a_second_read(monkeypatch, tmp_path):
+    """
+    Every pack was re-read from disk on every tool call - manifests re-parsed, markdown re-read,
+    PDFs re-extracted - on the event loop, once per ListDomains. Linear in the number of packs.
+    """
+    write_pack(tmp_path, "house", "- HR-01: A rule.\n", "- V1 | q | examples: e | why: w\n")
+    monkeypatch.setenv(KNOWDOCS_ENV_VAR, str(tmp_path))
+    PackCatalogue.clear_shared_catalogue_for_testing()
+
+    assert PackCatalogue.peek() is None, "nothing cached before the first read"
+    first: list = load_catalogue()
+    assert PackCatalogue.peek() is not None, "the first read must publish to the cache"
+    second: list = load_catalogue()
+
+    # The same pack objects, not merely equal ones: proof it was not rebuilt.
+    assert first[0] is second[0]
+
+
+def test_an_edited_pack_is_picked_up_without_a_restart(monkeypatch, tmp_path):
+    """
+    The reason freshness is a full walk of the root rather than a TTL. A cache that served a
+    stale pack would be worse than no cache: the designer would embed a standard the document no
+    longer contains, and the verifier would agree with it, because both read the same stale copy.
+    """
+    write_pack(tmp_path, "house", "- HR-01: A rule.\n", "- V1 | q | examples: e | why: w\n")
+    monkeypatch.setenv(KNOWDOCS_ENV_VAR, str(tmp_path))
+    PackCatalogue.clear_shared_catalogue_for_testing()
+
+    assert [standard.standard_id for standard in load_pack("house").standards] == ["HR-01"]
+
+    time.sleep(0.01)
+    (tmp_path / "house" / "operating_standards.md").write_text(
+        "- HR-01: A rule.\n- HR-02: Another rule.\n", encoding="utf-8"
+    )
+
+    assert [standard.standard_id for standard in load_pack("house").standards] == ["HR-01", "HR-02"]
+
+
+def test_a_pack_added_after_the_catalogue_loaded_becomes_visible(monkeypatch, tmp_path):
+    """
+    Adding a domain is a filesystem operation, so it has to remain one after caching.
+    """
+    write_pack(tmp_path, "house", "- HR-01: A rule.\n", "- V1 | q | examples: e | why: w\n")
+    monkeypatch.setenv(KNOWDOCS_ENV_VAR, str(tmp_path))
+    PackCatalogue.clear_shared_catalogue_for_testing()
+
+    assert load_catalogue()
+    time.sleep(0.01)
+    write_pack(tmp_path, "second", "- SC-01: A rule.\n", "- V1 | q | examples: e | why: w\n")
+
+    assert discover_domains() == ["house", "second"]
+
+
+def test_reading_one_pack_does_not_force_a_load_of_every_pack(monkeypatch, tmp_path):
+    """
+    A cold single-pack read must stay a single-pack read.
+
+    Serving load_pack from the whole-catalogue cache is right when the cache is warm, but must
+    not turn a one-pack read into an O(all packs) one just because it happens to be cold - which
+    would make a deployment with two hundred packs slower per read than before caching existed.
+    """
+    for index in range(5):
+        write_pack(tmp_path, f"pack{index}", f"- P{index}-01: A rule.\n", "- V1 | q | examples: e | why: w\n")
+    monkeypatch.setenv(KNOWDOCS_ENV_VAR, str(tmp_path))
+    PackCatalogue.clear_shared_catalogue_for_testing()
+
+    pack = load_pack("pack3")
+
+    assert pack.domain_id == "pack3"
+    assert PackCatalogue.peek() is None, "a single-pack read must not have loaded the catalogue"
+
+
+def test_an_explicit_root_never_reads_the_shared_cache(monkeypatch, tmp_path):
+    """
+    An explicit root= is a caller reading somewhere other than the deployment's own store. The
+    single-slot cache cannot hold two roots, so serving one from the other would be a wrong hit -
+    the worst possible outcome for a component whose job is being trustworthy about content.
+    """
+    write_pack(tmp_path, "house", "- HR-01: From the env root.\n", "- V1 | q | examples: e | why: w\n")
+    other: Path = tmp_path / "elsewhere"
+    other.mkdir()
+    write_pack(other, "house", "- HR-01: From the explicit root.\n", "- V1 | q | examples: e | why: w\n")
+    monkeypatch.setenv(KNOWDOCS_ENV_VAR, str(tmp_path))
+    PackCatalogue.clear_shared_catalogue_for_testing()
+
+    load_catalogue()
+    assert "From the env root" in load_pack("house").standards[0].text
+    assert "From the explicit root" in load_pack("house", other).standards[0].text
+
+
+def test_the_fingerprint_survives_a_root_that_does_not_exist(monkeypatch, tmp_path):
+    """
+    SharedProcessCache requires a fingerprint that never raises, so a missing root has to be a
+    version of the source rather than an exception on every read.
+    """
+    monkeypatch.setenv(KNOWDOCS_ENV_VAR, str(tmp_path / "nothing-here"))
+    PackCatalogue.clear_shared_catalogue_for_testing()
+
+    assert catalogue_fingerprint()
+    assert not load_catalogue()
+    assert not discover_domains()

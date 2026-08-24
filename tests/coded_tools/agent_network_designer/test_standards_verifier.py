@@ -26,7 +26,7 @@ from typing import Any
 import pytest
 
 from coded_tools.agent_network_designer.knowledge_pack import KnowledgePack
-from coded_tools.agent_network_designer.knowledge_pack import load_pack
+from coded_tools.agent_network_designer.pack_catalogue import load_pack
 from coded_tools.agent_network_designer.standards_verifier import extract_embedded_standards
 from coded_tools.agent_network_designer.standards_verifier import network_definition_from_hocon
 from coded_tools.agent_network_designer.standards_verifier import render_report

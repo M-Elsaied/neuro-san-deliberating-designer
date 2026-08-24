@@ -36,8 +36,8 @@ from typing import Any
 import pytest
 
 from coded_tools.agent_network_designer.knowledge_pack import KnowledgePack
-from coded_tools.agent_network_designer.knowledge_pack import discover_domains
-from coded_tools.agent_network_designer.knowledge_pack import load_pack
+from coded_tools.agent_network_designer.pack_catalogue import discover_domains
+from coded_tools.agent_network_designer.pack_catalogue import load_pack
 from coded_tools.agent_network_designer.standards_verifier import VerificationResult
 from coded_tools.agent_network_designer.standards_verifier import render_report
 from coded_tools.agent_network_designer.standards_verifier import verify

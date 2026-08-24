@@ -486,7 +486,8 @@ Operational notes:
             "function": {
                 "description": """
 Returns the curated knowledge domains available on this deployment: for each, its id, title, a short
-summary of what it covers, its pack version, and the ids of the operating standards it defines.
+summary of what it covers, its pack version, and how many operating standards it defines. Match on
+the summary; you do not need the standards themselves to choose, and ExtractDocs returns them in full.
 Call this FIRST, before deciding which domain a request belongs to. Never assume a domain exists.
 If it returns an error, this deployment has no curated knowledge at all: say so plainly and continue
 on general knowledge.

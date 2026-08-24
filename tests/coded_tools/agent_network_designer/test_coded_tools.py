@@ -33,8 +33,8 @@ import pytest
 from coded_tools.agent_network_designer.extract_docs import ExtractDocs
 from coded_tools.agent_network_designer.knowledge_pack import PACK_PROVENANCE
 from coded_tools.agent_network_designer.knowledge_pack import KnowledgePack
-from coded_tools.agent_network_designer.knowledge_pack import load_pack
 from coded_tools.agent_network_designer.list_domains import ListDomains
+from coded_tools.agent_network_designer.pack_catalogue import load_pack
 from coded_tools.agent_network_designer.verify_standards import VerifyStandards
 from tests.coded_tools.agent_network_designer.network_fixtures import reference_network
 
@@ -63,9 +63,14 @@ def built_fixture(pack) -> dict[str, Any]:
 # --------------------------------------------------------------------------------------
 
 
-def test_list_domains_reports_the_catalogue_with_versions_and_ids():
+def test_list_domains_reports_what_is_needed_to_choose_a_domain():
     """
-    The designer decides which domain a request belongs to from this, so it has to be complete.
+    The designer decides which domain a request belongs to from this, so it has to be sufficient.
+
+    Sufficient, not exhaustive. Choosing needs the title and the summary; it does not need the
+    standards themselves, which ExtractDocs returns in full one turn later. The id list was also
+    the only unbounded term in a payload that then sits in context for the whole conversation, so
+    it is reported as a count.
     """
     result: Any = ListDomains().invoke({}, {})
 
@@ -73,8 +78,18 @@ def test_list_domains_reports_the_catalogue_with_versions_and_ids():
     assert result["count"] == len(result["domains"])
     entry: dict[str, Any] = next(item for item in result["domains"] if item["id"] == DOMAIN)
     assert entry["version"]
-    assert entry["standard_ids"]
     assert entry["title"]
+    assert entry["standard_count"] == len(load_pack(DOMAIN).standards)
+
+
+def test_list_domains_does_not_carry_the_standard_ids():
+    """
+    The unbounded term, kept out on purpose: guards against it being reinstated for convenience.
+    """
+    result: Any = ListDomains().invoke({}, {})
+
+    for entry in result["domains"]:
+        assert "standard_ids" not in entry, "the catalogue payload must stay bounded per domain"
 
 
 def test_list_domains_takes_no_arguments():

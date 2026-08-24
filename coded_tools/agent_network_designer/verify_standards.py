@@ -29,8 +29,8 @@ from neuro_san.interfaces.coded_tool import CodedTool
 
 from coded_tools.agent_network_designer.knowledge_pack import PACK_PROVENANCE
 from coded_tools.agent_network_designer.knowledge_pack import KnowledgePack
-from coded_tools.agent_network_designer.knowledge_pack import discover_domains
-from coded_tools.agent_network_designer.knowledge_pack import load_pack
+from coded_tools.agent_network_designer.pack_catalogue import discover_domains
+from coded_tools.agent_network_designer.pack_catalogue import load_pack
 from coded_tools.agent_network_designer.standards_verifier import VerificationResult
 from coded_tools.agent_network_designer.standards_verifier import render_report
 from coded_tools.agent_network_designer.standards_verifier import verify
@@ -80,11 +80,15 @@ class VerifyStandards(CodedTool):
                 A text string error message in the format:
                 "Error: <error message>"
         """
-        available: str = ", ".join(discover_domains()) or "none"
-
         domain_id: str | None = args.get("app_name")
         if not domain_id:
-            return f"Error: No domain provided to verify against. Available curated domains: {available}"
+            # Built here rather than up front: this runs on every verification in the live
+            # designer path, and walking the knowdocs root to compose an error string that is
+            # discarded on success is work nobody asked for.
+            return (
+                f"Error: No domain provided to verify against. "
+                f"Available curated domains: {', '.join(discover_domains()) or 'none'}"
+            )
 
         # The network under audit is read ONLY from sly_data, which the middleware maintains.
         # It is deliberately not accepted from args: args is what the model sends, and letting the
@@ -100,7 +104,7 @@ class VerifyStandards(CodedTool):
         try:
             pack: KnowledgePack = load_pack(domain_id)
         except (FileNotFoundError, OSError) as exception:
-            return f"Error: {exception}. Available curated domains: {available}"
+            return f"Error: {exception}. Available curated domains: {', '.join(discover_domains()) or 'none'}"
 
         result: VerificationResult = verify(pack, network_definition)
         report: str = render_report(result)
