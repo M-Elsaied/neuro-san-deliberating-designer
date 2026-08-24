@@ -178,8 +178,16 @@ work.
 | **Structure** | Where roles are declared, no single agent owns both a precondition and the work it guards. |
 | **Pack** | The pack itself loaded soundly. A standard that never loaded cannot have reached the network. |
 
-Failures are reported, not raised — a network covering five of six standards with one flagged is more
-useful than an exception. Pass `strict` to make a failure an error instead.
+**What blocks a build, and what does not.** A standard that was paraphrased, or an id the pack does
+not define, is sent back to be corrected — and if the wording still cannot be reproduced within the
+retry budget, the network is not written at all. Neither is a judgement call: a rule stated in words
+nobody in the domain agreed to is a different rule wearing its id, and a rule with no source is
+unchallengeable.
+
+Coverage, ambiguous ownership and topology are reported but never block. A network carrying five of
+six standards with the sixth flagged is more useful than an exception, and a gate that refused it
+would be switched off — taking the fidelity check with it. Set
+`AGENT_NETWORK_DESIGNER_ENFORCE_STANDARDS=false` to make everything advisory again.
 
 ### Errors and warnings
 
