@@ -1,0 +1,35 @@
+# Knowledge pack manifest - Oracle database patching.
+#
+# Identity, provenance and the pack's own standard id pattern. Everything here is data:
+# the designer's method layer reads it and holds no domain facts of its own.
+#
+# `roles` assigns each standard a temporal role, which is what turns knowledge into topology:
+#   precondition  -> a gate agent, upstream of the work
+#   work          -> the operation itself
+#   postcondition -> a validator agent, downstream, owning hand-back
+# Declaring the role here rather than leaving the language model to infer it from wording makes
+# the resulting shape checkable - see coded_tools/agent_network_designer/verify_standards.py.
+{
+    domain_id = "oracle_database_patching"
+    title = "Oracle database patching"
+    summary = "applying Oracle RU/PSU patches across a database estate (opatch, datapatch, RMAN, MOS README, connectivity validation)"
+
+    version = "1.0.0"
+    # Set this to the team that owns the SOP. It is rendered into the generated network's
+    # provenance line, so keep it short - a team name, not a sentence.
+    owner = "unassigned"
+    approved_by = ""
+    effective_date = ""
+    source = "Typical industry practice and Oracle Support (MOS) patch READMEs. Confirm against your own change-management SOP before relying on it."
+
+    standard_id_pattern = "ODB-\\d{2}"
+
+    roles {
+        "ODB-01" = precondition
+        "ODB-02" = precondition
+        "ODB-03" = precondition
+        "ODB-04" = postcondition
+        "ODB-05" = precondition
+        "ODB-06" = postcondition
+    }
+}

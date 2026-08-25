@@ -51,8 +51,17 @@ class DeployableAgentNetworkAssembler(AgentNetworkAssembler):
         self.aaosa_defs: dict[str, Any] = None
 
     # pylint: disable=too-many-locals
+    # pack_provenance is keyword-only and optional, so this stays a four-argument call for
+    # every existing caller; the count is what pylint objects to, not the signature.
+    # pylint: disable=too-many-arguments
     async def assemble_agent_network(
-        self, network_def: dict[str, Any], top_agent_name: str, agent_network_name: str, sample_queries: list[str]
+        self,
+        network_def: dict[str, Any],
+        top_agent_name: str,
+        agent_network_name: str,
+        sample_queries: list[str],
+        *,
+        pack_provenance: str = "",
     ) -> dict[str, Any]:
         """
         Assemble the agent network from the definition.
@@ -61,6 +70,8 @@ class DeployableAgentNetworkAssembler(AgentNetworkAssembler):
         :param top_agent_name: The name of the top agent
         :param agent_network_name: The file name, without the .hocon extension
         :param sample_queries: List of sample queries for the agent network
+        :param pack_provenance: Optional curated-knowledge-pack provenance line to record in the
+                network's metadata
 
         :return: Some representation of the agent network
         """
@@ -80,9 +91,16 @@ class DeployableAgentNetworkAssembler(AgentNetworkAssembler):
         agent_network["tools"] = []
         del agent_network["commondefs"]
 
-        # Add metadata if sample queries are provided
+        # Add metadata if sample queries are provided, or if we know which curated pack this
+        # network was designed from - a reservation is as much in need of stating its ancestry as
+        # a file on disk, so the two assemblers record the same key.
+        metadata: dict[str, Any] = {}
         if sample_queries:
-            agent_network["metadata"] = {"sample_queries": sample_queries}
+            metadata["sample_queries"] = sample_queries
+        if pack_provenance:
+            metadata["knowledge_pack"] = pack_provenance
+        if metadata:
+            agent_network["metadata"] = metadata
 
         agent_name: str = None
         agent_def: dict[str, Any] = {}

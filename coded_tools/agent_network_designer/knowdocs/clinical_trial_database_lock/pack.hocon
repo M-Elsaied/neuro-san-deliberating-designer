@@ -1,0 +1,30 @@
+# Knowledge pack manifest - clinical trial database lock.
+# See oracle_database_patching/pack.hocon for what each field means.
+#
+# This pack exists as the non-IT proof case: it demonstrates that the designer's method layer
+# carries no IT vocabulary, since the same mechanism produces a regulated data-management
+# workflow from a different set of documents.
+{
+    domain_id = "clinical_trial_database_lock"
+    title = "Clinical trial database lock"
+    summary = "locking a clinical trial database (query closure, SDV, medical coding, protocol deviations, soft lock then hard lock, unblinding control)"
+
+    version = "1.0.0"
+    # Set this to the team that owns the SOP. It is rendered into the generated network's
+    # provenance line, so keep it short - a team name, not a sentence.
+    owner = "unassigned"
+    approved_by = ""
+    effective_date = ""
+    source = "A typical clinical database lock SOP as practised across the industry under ICH E6 (GCP) and 21 CFR Part 11. Individual sponsors' SOPs differ in detail; confirm against the study's own Data Management Plan before relying on them."
+
+    standard_id_pattern = "DBL-\\d{2}"
+
+    roles {
+        "DBL-01" = precondition
+        "DBL-02" = precondition
+        "DBL-03" = precondition
+        "DBL-04" = precondition
+        "DBL-05" = work
+        "DBL-06" = postcondition
+    }
+}

@@ -40,7 +40,7 @@ HOCON_HEADER_START = (
     '        "sample_queries": [\n'
     "            %s\n"
     "        ],\n"
-    '        "date_created": "%s"\n'
+    '        "date_created": "%s"%s\n'
     "    },\n"
     "\n"
     "# Load the shared LLM configuration from a single source of truth.\n"
@@ -131,8 +131,17 @@ class HoconAgentNetworkAssembler(AgentNetworkAssembler):
         """
         self.demo_mode: bool = demo_mode
 
+    # pack_provenance is keyword-only and optional, so this stays a four-argument call for
+    # every existing caller; the count is what pylint objects to, not the signature.
+    # pylint: disable=too-many-arguments
     async def assemble_agent_network(
-        self, network_def: dict[str, Any], top_agent_name: str, agent_network_name: str, sample_queries: list[str]
+        self,
+        network_def: dict[str, Any],
+        top_agent_name: str,
+        agent_network_name: str,
+        sample_queries: list[str],
+        *,
+        pack_provenance: str = "",
     ) -> str:
         """
         Substitutes value from agent network definition into the template of agent network HOCON file
@@ -141,13 +150,15 @@ class HoconAgentNetworkAssembler(AgentNetworkAssembler):
         :param top_agent_name: The name of the top agent
         :param agent_network_name: The file name, without the .hocon extension
         :param sample_queries: List of sample queries for the agent network
+        :param pack_provenance: Optional curated-knowledge-pack provenance line to record in the
+                network's metadata
 
         :return: A full agent network HOCON as a string.
         """
         use_network_def: dict[str, Any] = shallow_copy(network_def)
         use_network_def = self._move_top_agent_first(use_network_def, top_agent_name)
 
-        header: str = self._build_header(agent_network_name, sample_queries)
+        header: str = self._build_header(agent_network_name, sample_queries, pack_provenance)
 
         body: list[str] = []
         for agent_name, agent in use_network_def.items():
@@ -187,17 +198,26 @@ class HoconAgentNetworkAssembler(AgentNetworkAssembler):
             formatted_queries = ",\n            ".join(parts)
         return formatted_queries
 
-    def _build_header(self, agent_network_name: str, sample_queries: list[str]) -> str:
+    def _build_header(self, agent_network_name: str, sample_queries: list[str], pack_provenance: str = "") -> str:
         """
         Build the header of the HOCON agent network file.
 
         :param agent_network_name: The file name, without the .hocon extension
         :param sample_queries: List of sample queries for the agent network
+        :param pack_provenance: Optional curated-knowledge-pack provenance line to record in the
+                network's metadata
 
         :return: The header of the HOCON agent network file as a string.
         """
         formatted_queries: str = self._format_sample_queries(sample_queries)
         date_created: str = datetime.datetime.now(tz=datetime.timezone.utc).isoformat()
+        # Recorded next to date_created so the file itself says which curated pack, at which
+        # version, it was built from. Omitted entirely when there was no pack, rather than
+        # written as an empty string that would read as "no known source".
+        provenance_entry: str = ""
+        if pack_provenance:
+            escaped: str = pack_provenance.replace("\\", "\\\\").replace('"', '\\"')
+            provenance_entry = f',\n        "knowledge_pack": "{escaped}"'
         demo_mode_block: str = (
             '   "demo_mode": "You are part of a demo system, so when queried, make up a realistic '
             "response as if you are actually grounded in real data or you are operating a real "
@@ -207,7 +227,7 @@ class HoconAgentNetworkAssembler(AgentNetworkAssembler):
         )
 
         return (
-            HOCON_HEADER_START % (formatted_queries, date_created)
+            HOCON_HEADER_START % (formatted_queries, date_created, provenance_entry)
             + agent_network_name
             + HOCON_HEADER_REMAINDER % demo_mode_block
         )
