@@ -93,9 +93,10 @@ def registry_fixture() -> Any:
     :return: The parsed designer registry, with includes resolved from the repository root.
     """
     assert REGISTRY_PATH.is_file(), f"{REGISTRY_PATH} not found - run pytest from the repository root"
-    # basedir="." because the file's own includes are written relative to the repository root,
-    # which is how the server loads it.
-    return ConfigFactory.parse_string(REGISTRY_PATH.read_text(encoding="utf-8"), basedir=".")
+    # parse_string, not parse_file: the file's includes are written relative to the repository
+    # root, which is how the server loads it, and parse_file would resolve them against
+    # registries/ instead.
+    return ConfigFactory.parse_string(REGISTRY_PATH.read_text(encoding="utf-8"))
 
 
 @pytest.fixture(name="agents")
