@@ -110,10 +110,13 @@ and the claim fails.
 
 ### Known limits
 
-1. **A `MUST:` line is still not a runtime control.** `VerifyStandards` now checks that a standard
-   *survived into the artifact*, verbatim and attributed. It cannot make the generated network obey its own
-   `MUST` once that network runs - that needs deterministic tooling in the built agents themselves.
-   Verification is also advisory by default: it reports, and the network is still written.
+1. **A `MUST:` line is still not a runtime control.** `VerifyStandards` checks that a standard
+   *survived into the artifact*, verbatim and attributed, and a network whose standards were paraphrased
+   or invented is now sent back to be corrected and is not persisted if it cannot be. But that is
+   build-time enforcement: nothing makes the generated network obey its own `MUST` once that network
+   runs, which needs deterministic tooling in the built agents themselves. Coverage remains advisory by
+   design - a network carrying five of six standards with the sixth reported is more useful than an
+   exception, and a gate that refused it would be switched off.
 2. **A valid pack is not a correct pack.** A manifest and `validate()` catch malformed packs -
    duplicate ids, ids outside the declared pattern, a standard with no text, a missing `why` - and the
    pack's provenance is stamped into the generated network's `metadata`. Nothing checks that what a
@@ -205,6 +208,15 @@ coded_tools/agent_network_designer/knowdocs/<your_domain>/
 Copy an existing set for the shape. Domains are discovered by scanning the root, so there is no Python to
 edit and no prompt to edit - the designer asks `ListDomains` what exists rather than being told. Set
 `AGENT_NETWORK_DESIGNER_KNOWDOCS` to serve packs from outside the repository entirely.
+
+Then check it, before finding out the hard way three minutes into a design session:
+
+```bash
+python -m coded_tools.agent_network_designer.authoring validate --domain <your_domain>
+```
+
+Exit `0` means usable. Anything the parser could not read is reported with its line number and what to
+do about it - a rule that does not load is a rule that silently will not reach the network.
 
 Keep packs short: documents are returned whole, so they are standards and open variables, not manuals.
 [docs/knowledge_packs.md](docs/knowledge_packs.md) has the field-by-field format and a checklist.

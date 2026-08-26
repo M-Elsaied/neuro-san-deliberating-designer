@@ -27,6 +27,7 @@ method layer contains no domain nouns at all: L1 purity enforced structurally ra
 discipline. Dropping a folder into the knowdocs root is sufficient to make a domain reachable.
 """
 
+import asyncio
 import logging
 from typing import Any
 
@@ -34,7 +35,8 @@ from neuro_san.interfaces.coded_tool import CodedTool
 
 from coded_tools.agent_network_designer.knowledge_pack import KnowledgePack
 from coded_tools.agent_network_designer.knowledge_pack import knowdocs_root
-from coded_tools.agent_network_designer.knowledge_pack import load_catalogue
+from coded_tools.agent_network_designer.pack_catalogue import PackCatalogue
+from coded_tools.agent_network_designer.pack_catalogue import load_catalogue
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +58,7 @@ class ListDomains(CodedTool):
             If successful:
                 A dictionary with the keys:
                 - "domains" (list): one entry per domain, each with "id", "title", "summary",
-                  "version" and "standard_ids".
+                  "version" and "standard_count".
                 - "count" (int): how many domains were found.
             Otherwise:
                 A text string error message in the format:
@@ -77,7 +79,12 @@ class ListDomains(CodedTool):
                     "title": pack.manifest.title or pack.domain_id,
                     "summary": pack.manifest.summary,
                     "version": pack.manifest.version,
-                    "standard_ids": [standard.standard_id for standard in pack.standards],
+                    # A count, not the ids. The catalogue exists so the model can CHOOSE a
+                    # domain, and it never needs an id to do that - ExtractDocs hands it every
+                    # id, verbatim, one turn later. The id list was also the only part of this
+                    # payload with no upper bound: it grows with every standard in every pack,
+                    # and the whole catalogue sits in context for the rest of the conversation.
+                    "standard_count": len(pack.standards),
                 }
             )
 
@@ -86,10 +93,16 @@ class ListDomains(CodedTool):
 
     async def async_invoke(self, args: dict[str, Any], sly_data: dict[str, Any]) -> dict[str, Any] | str:
         """
-        Delegates to the synchronous implementation: this is a directory scan.
+        Read the catalogue without blocking the event loop on a cold cache.
+
+        A warm cache is a lock-free read, so the common case stays on the loop. A miss parses
+        every pack in the knowdocs root - manifests, markdown and any PDF text - which is
+        filesystem work that belongs in a worker thread while other conversations proceed.
 
         :param args: See invoke().
         :param sly_data: See invoke().
         :return: See invoke().
         """
+        if PackCatalogue.peek() is None:
+            return await asyncio.to_thread(self.invoke, args, sly_data)
         return self.invoke(args, sly_data)

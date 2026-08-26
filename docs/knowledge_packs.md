@@ -40,6 +40,45 @@ export AGENT_NETWORK_DESIGNER_KNOWDOCS=/srv/agent-knowledge/packs
 
 ---
 
+## Scale: what this handles, and where it stops
+
+Packs are read once per process, not once per tool call. Measured on the three shipped packs:
+
+| | Before | After |
+|---|---|---|
+| `load_catalogue()` | 19.8 ms, every call | 0.6 ms warm (46x) |
+| Where that ran | on the event loop | in a worker thread on a miss |
+
+Freshness is a full walk of the knowdocs root, capturing each document's modification time. That
+walk *is* the 0.6 ms, and it is the whole warm cost. It is deliberately the most expensive probe
+available: it means an edited pack is picked up with no restart, no TTL to tune and no staleness
+window. A cache that could serve a stale pack would be worse than no cache, because the designer
+and the verifier read the same copy — they would agree with each other about a document that had
+already changed.
+
+**The ceiling is the prompt, not the filesystem.** `ListDomains` returns every domain, and that
+payload then sits in context for the rest of the conversation:
+
+| Domains | Catalogue payload |
+|---|---|
+| 10 | ~2,700 chars (~680 tokens) |
+| 50 | ~13,600 chars (~3,400 tokens) |
+| 200 | ~54,600 chars (~13,700 tokens) |
+
+Reporting a standard *count* per domain rather than the full id list took this from 330 to 273
+characters per domain — a fifth off a term that is still linear in the number of domains. Caching
+removes repeated work; it does not remove that. Somewhere past a few dozen domains, "list
+everything and let the model choose" stops being a catalogue and becomes a retrieval problem.
+
+**Where a retrieval layer would go.** `ListDomains` and `ExtractDocs` are a two-call seam: *choose
+a domain from a catalogue*, then *fetch that domain whole*. Replacing the bodies of those two
+coded tools — `ListDomains` becoming a query against an index, `ExtractDocs` a fetch by id — is
+sufficient to put a retrieval or MCP-backed knowledge layer underneath, and it changes neither the
+designer's prompt, nor the pack format, nor `standards_verifier.py`, which compares against a
+loaded pack regardless of where that pack came from. That is deliberately not built here.
+
+---
+
 ## `operating_standards.md`
 
 One bullet per standard: an id, a colon, then the rule. Wrap freely across lines — continuations are
@@ -139,8 +178,16 @@ work.
 | **Structure** | Where roles are declared, no single agent owns both a precondition and the work it guards. |
 | **Pack** | The pack itself loaded soundly. A standard that never loaded cannot have reached the network. |
 
-Failures are reported, not raised — a network covering five of six standards with one flagged is more
-useful than an exception. Pass `strict` to make a failure an error instead.
+**What blocks a build, and what does not.** A standard that was paraphrased, or an id the pack does
+not define, is sent back to be corrected — and if the wording still cannot be reproduced within the
+retry budget, the network is not written at all. Neither is a judgement call: a rule stated in words
+nobody in the domain agreed to is a different rule wearing its id, and a rule with no source is
+unchallengeable.
+
+Coverage, ambiguous ownership and topology are reported but never block. A network carrying five of
+six standards with the sixth flagged is more useful than an exception, and a gate that refused it
+would be switched off — taking the fidelity check with it. Set
+`AGENT_NETWORK_DESIGNER_ENFORCE_STANDARDS=false` to make everything advisory again.
 
 ### Errors and warnings
 
@@ -191,14 +238,109 @@ Exit code `0` if the network verifies clean, `1` if it does not, `2` on a usage 
 2. Write `operating_standards.md` — short, invariant, each rule with a stable id.
 3. Write `open_variables.md` — only what the requester alone can answer, each with its why.
 4. Write `pack.hocon` — version and owner at minimum, plus your id pattern if it is not `ABC-01`.
-5. Confirm it loads and validates:
+5. Check it:
 
-   ```python
-   from coded_tools.agent_network_designer.knowledge_pack import load_pack
-   print(load_pack("your_domain").validate())   # [] means clean
+   ```bash
+   python -m coded_tools.agent_network_designer.authoring validate --domain your_domain
    ```
+
+   Exit `0` means usable. Anything wrong is reported with the line it is on and what to do about
+   it. Add `--strict` if an incomplete `pack.hocon` should also count as a failure.
 
 6. Ask the designer to build something in your domain, and read the verified coverage table.
 
 No step edits Python or the designer's prompt. If one did, this would be an example rather than an
 extension point.
+
+### Checking every pack at once
+
+```bash
+python -m coded_tools.agent_network_designer.authoring validate --all
+```
+
+One line per pack — `OK`, `OK*` for usable but under-specified, `PROBLEM` for unusable — then the
+detail for anything that needs attention. This is also what CI runs, so a malformed pack anywhere
+under the knowdocs root fails the build rather than surfacing three minutes into a design session.
+
+---
+
+## What this costs to maintain
+
+Verification is deterministic, so it costs nothing per run — no model, no key, no network. The
+things it checks *against*, though, do cost something to keep current, and that is worth stating
+rather than discovering later.
+
+Measured on this repository:
+
+| | |
+|---|---|
+| Designer unit tests | 161 passing, ~2s, no model |
+| `make validate-packs` | one cached catalogue load, ~0.6ms plus process startup |
+| `pymarkdown` over `knowdocs/` | 0 findings |
+
+The recurring costs, named:
+
+- **Adding a pack to this repository** means adding one line to
+  `tests/coded_tools/agent_network_designer/shipped_packs.py`. Deliberate: a pack appearing on disk
+  with nobody noticing is how a malformed one used to reach a green build.
+- **Every pack present is validated by CI**, including a deployment's own. A malformed pack is a
+  red build rather than a surprise three minutes into a design session. That is the point, and it
+  does mean a half-finished pack cannot sit in the tree.
+- **Pack markdown is linted** with the same rules as the rest of the documentation.
+- **Editing a standard's wording** is free as far as the tests are concerned — the reference
+  networks used by the scenario benchmark are derived from the pack itself, so a new or changed
+  domain brings its own coverage rather than needing a hand-written fixture.
+- **Changing a standard's id or role** does need the manifest kept in step. `validate` reports the
+  mismatch, and it is the one edit that reliably requires touching two files.
+
+What is deliberately *not* in CI: the extractor. It needs a model and an API key, so it runs when
+an author runs it and never on a build.
+
+---
+
+## Auditing an estate of generated networks
+
+Verification is a moment-in-time check: it answers *"does this network carry its pack faithfully?"*
+as the network is built. Packs then change — a standard is reworded, a control is added, a version
+is cut — and every network built before that change quietly stops implementing the document it
+claims to. In a regulated context an out-of-date control is the whole problem, not an edge case.
+
+```bash
+python -m coded_tools.agent_network_designer.network_audit registries/generated/
+```
+
+```text
+| Network                        | Pack                       | Built at | Pack now | Status   |
+| exadata_oracle_patching.hocon  | oracle_database_patching   | -        | v1.0.0   | unstamped|
+| kubeadm_cluster_upgrade.hocon  | kubernetes_cluster_upgrade  | v1.0.0   | v1.2.0   | **stale**|
+```
+
+| Status | Meaning |
+|---|---|
+| `current` | Built from this pack version, and every standard still matches |
+| `stale` | The pack has moved on since this network was built |
+| `drifted` | A standard's **text** no longer matches, whatever the version says |
+| `unstamped` | Predates provenance stamping. Reported, not flagged — its standards may be fine |
+| `unknown pack` | Embeds ids belonging to no pack on this deployment |
+| `no standards` | Carries no `MUST: … [id]` lines at all, so nothing is traceable |
+
+`drifted` is the one that earns its keep. Someone edits a standard's wording and does not bump the
+version — the most likely way for an estate to go quietly out of date — and a version comparison
+would call that network current. The text comparison does not, and it names the standard.
+
+Exit code `0` when nothing needs attention, `1` when something does, so this runs as a scheduled
+check rather than by eye.
+
+### Traceability
+
+The question an auditor actually asks — *show me everything that implements this rule*:
+
+```bash
+python -m coded_tools.agent_network_designer.network_audit registries/generated/ --standard ODB-03
+python -m coded_tools.agent_network_designer.network_audit registries/generated/ --pack oracle_database_patching
+```
+
+A network is matched to its pack by **the standard ids it embeds**, not by its metadata. That is
+deliberate: it needs no parsing of a human-readable provenance line, it works on networks generated
+before provenance stamping existed, and it cannot be fooled by metadata that says one thing while
+the instructions say another — which is exactly the discrepancy an audit is for.

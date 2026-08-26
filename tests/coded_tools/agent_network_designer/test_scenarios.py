@@ -36,20 +36,15 @@ from typing import Any
 import pytest
 
 from coded_tools.agent_network_designer.knowledge_pack import KnowledgePack
-from coded_tools.agent_network_designer.knowledge_pack import discover_domains
-from coded_tools.agent_network_designer.knowledge_pack import load_pack
+from coded_tools.agent_network_designer.pack_catalogue import discover_domains
+from coded_tools.agent_network_designer.pack_catalogue import load_pack
 from coded_tools.agent_network_designer.standards_verifier import VerificationResult
 from coded_tools.agent_network_designer.standards_verifier import render_report
 from coded_tools.agent_network_designer.standards_verifier import verify
 from tests.coded_tools.agent_network_designer.network_fixtures import MUTATIONS
 from tests.coded_tools.agent_network_designer.network_fixtures import Mutation
 from tests.coded_tools.agent_network_designer.network_fixtures import reference_network
-
-SHIPPED_DOMAINS: tuple[str, ...] = (
-    "clinical_trial_database_lock",
-    "kubernetes_cluster_upgrade",
-    "oracle_database_patching",
-)
+from tests.coded_tools.agent_network_designer.shipped_packs import SHIPPED_DOMAINS
 
 
 def _has_work_role(pack: KnowledgePack) -> bool:

@@ -1,0 +1,66 @@
+{
+  "domain": "oracle_database_patching",
+  "note": "Hand-authored fixture. See tests/.../test_interview_review.py.",
+  "turns": [
+    {
+      "role": "user",
+      "text": "Build me an agent network for Oracle db patching"
+    },
+    {
+      "role": "designer",
+      "text": "Matched the curated domain Oracle database patching.\n\nFirst, what is the topology of the estate - single instance, RAC, Data Guard standby, or Exadata? It decides whether we can patch rolling or need a full outage."
+    },
+    {
+      "role": "user",
+      "text": "Two-node RAC in prod with a Data Guard standby; dev and QA single instance."
+    },
+    {
+      "role": "designer",
+      "text": "Understood. How many databases are in scope, and in what order do the environments go?"
+    },
+    {
+      "role": "user",
+      "text": "About 40 databases. DEV, then QA, then PROD."
+    },
+    {
+      "role": "designer",
+      "text": "Thanks. What maintenance window do you have, and can PROD take a full outage?"
+    },
+    {
+      "role": "user",
+      "text": "Four-hour Saturday window, PROD rolling with no full outage."
+    },
+    {
+      "role": "designer",
+      "text": "Who takes the backup, and is a verified restore point required?"
+    },
+    {
+      "role": "user",
+      "text": "DBA team takes the RMAN backup, verified restore point required."
+    },
+    {
+      "role": "designer",
+      "text": "How is production change-gated?"
+    },
+    {
+      "role": "user",
+      "text": "ServiceNow CR approved by CAB."
+    },
+    {
+      "role": "designer",
+      "text": "What is the rollback path, and who signs off connectivity afterwards?"
+    },
+    {
+      "role": "user",
+      "text": "opatch rollback, and the DBA team signs off connectivity."
+    },
+    {
+      "role": "user",
+      "text": "APPROVED"
+    },
+    {
+      "role": "designer",
+      "text": "## Standards coverage (verified)\n\n_Pack: Oracle database patching, v1.0.0, owned by unassigned_\n\n| Standard | Role | Owned by | Fidelity |\n|---|---|---|---|\n| **ODB-01** | precondition | `readiness_gate` | verbatim |\n| **ODB-02** | precondition | `readiness_gate` | verbatim |\n| **ODB-03** | precondition | `readiness_gate` | verbatim |\n| **ODB-04** | precondition | `readiness_gate` | verbatim |\n| **ODB-05** | precondition | `readiness_gate` | verbatim |\n| **ODB-06** | precondition | `readiness_gate` | verbatim |\n\nEvery standard is embedded exactly once, verbatim, with a valid id.\n"
+    }
+  ]
+}

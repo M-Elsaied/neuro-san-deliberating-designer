@@ -27,6 +27,12 @@ from neuro_san.interfaces.reservationist import Reservationist
 from neuro_san.internals.validation.network.unreachable_nodes_network_validator import UnreachableNodesNetworkValidator
 
 from coded_tools.agent_network_designer.knowledge_pack import PACK_PROVENANCE
+from coded_tools.agent_network_designer.knowledge_pack import KnowledgePack
+from coded_tools.agent_network_designer.network_audit import identify_pack
+from coded_tools.agent_network_designer.pack_catalogue import load_catalogue
+from coded_tools.agent_network_designer.standards_verifier import VerificationResult
+from coded_tools.agent_network_designer.standards_verifier import extract_embedded_standards
+from coded_tools.agent_network_designer.standards_verifier import verify
 from coded_tools.agent_network_editor.and_logger import AndLogger
 from coded_tools.agent_network_editor.connectivity_dictionary_converter import ConnectivityDictionaryConverter
 from coded_tools.agent_network_editor.constants import AGENT_NETWORK_DEFINITION
@@ -56,6 +62,19 @@ DEMO_MODE: bool = environ.get("AGENT_NETWORK_DESIGNER_DEMO_MODE", "true").lower(
 
 # Subdirectory under registries directory where networks are saved when using file persistence.
 SUBDIRECTORY: str = environ.get("AGENT_NETWORK_DESIGNER_SUBDIRECTORY", DEFAULT_SUBDIRECTORY)
+
+# Whether a network whose curated standards were not reproduced faithfully may be persisted.
+#
+# Verification used to be advisory everywhere: the report said a standard had been paraphrased or
+# invented, and the network was written anyway. That leaves the one guarantee this design exists to
+# provide resting on a reader noticing a line in a report - which is the same weakness as the model
+# writing its own coverage table, moved one step later.
+#
+# Only the indefensible failures gate. A paraphrased standard is a rule stated in words nobody in
+# the domain agreed to; an invented id is a rule with no source at all. Neither is a judgement
+# call. Coverage, ambiguity and topology stay advisory deliberately: a network carrying five of six
+# standards with the sixth flagged is genuinely useful, and refusing it would make the tool worse.
+ENFORCE_STANDARDS: bool = environ.get("AGENT_NETWORK_DESIGNER_ENFORCE_STANDARDS", "true").lower() == "true"
 
 # Default number of validation retry rounds when the env var is unset or unparseable.
 DEFAULT_MAX_VALIDATION_ATTEMPTS: int = 3
@@ -241,7 +260,74 @@ class AgentNetworkPersistenceMiddleware(AgentMiddleware):
         instructions_errors: list[str] = await AgentNetworkInstructionsValidationMiddleware(self.sly_data).validate(
             network_def
         )
+        # Standards failures are instructions failures: a paraphrased standard is the wrong words in
+        # an agent's instructions, and agent_network_instructions_editor is the agent that fixes
+        # those. Folding them in here means they travel the existing repair loop - the divergence is
+        # handed back with the exact expected and found text, retried within the existing budget,
+        # and if it still cannot be reproduced faithfully the network is never persisted.
+        instructions_errors.extend(self._standards_errors(network_def))
         return structure_errors, instructions_errors
+
+    def _standards_errors(self, network_def: dict[str, Any]) -> list[str]:
+        """
+        Check that the curated standards survived into the network, faithfully and with real ids.
+
+        Only failures that cannot be defended are returned. See ENFORCE_STANDARDS above for why
+        coverage is excluded: a partially covered network with the gap reported is useful, and a
+        gate that refuses it would be switched off.
+
+        The pack is identified from the ids the network embeds rather than from sly_data, so this
+        works on a modification of an existing network as well as on a fresh build, and cannot be
+        misdirected by a provenance key that says one thing while the instructions say another.
+
+        :param network_def: The network definition about to be persisted.
+        :return: Human-readable errors, addressed to the instructions editor. Empty means nothing
+            indefensible was found, or there was no curated pack to check against.
+        """
+        if not ENFORCE_STANDARDS:
+            return []
+        try:
+            packs: list[KnowledgePack] = load_catalogue()
+            embedded = extract_embedded_standards(network_def)
+            pack: KnowledgePack | None = identify_pack(embedded, packs) if embedded else None
+        except (OSError, ValueError) as exception:
+            # A knowdocs root that cannot be read must not stop a network being built. This gate
+            # exists to catch a lossy build, not to make the designer depend on the filesystem.
+            self.logger.warning("Could not check standards, so not enforcing them: %s", exception)
+            return []
+
+        if pack is None:
+            # Nothing embedded from any curated pack: this network was designed on general
+            # knowledge, which is allowed and is reported to the user as unverified.
+            return []
+
+        result: VerificationResult = verify(pack, network_def)
+        errors: list[str] = []
+        for mismatch in result.infidelities:
+            errors.append(
+                f"Standard {mismatch['standard_id']} in agent '{mismatch['agent_name']}' does not match the "
+                f"curated document. It must be reproduced word for word. {mismatch['detail']} "
+                f"Call `agent_network_instructions_editor` to restore the exact wording."
+            )
+        for unknown in result.unknown:
+            errors.append(
+                f"Agent '{unknown.agent_name}' carries the standard id {unknown.standard_id}, which the "
+                f"{pack.domain_id} pack does not define. Remove it, or replace it with a real standard - "
+                f"a rule with no source is worse than no rule."
+            )
+        for problem in result.pack_errors:
+            errors.append(f"The curated pack itself did not load soundly, so this network cannot carry it: {problem}")
+
+        # Reported, never blocking. Logged rather than dropped so a partially covered build is
+        # visible in the server log as well as in the coverage table the user sees.
+        if result.missing or result.ambiguous or result.structural:
+            self.logger.warning(
+                "Standards coverage is incomplete but not blocking: missing=%s ambiguous=%s structural=%s",
+                result.missing,
+                result.ambiguous,
+                result.structural,
+            )
+        return errors
 
     async def _assemble_and_persist(
         self,

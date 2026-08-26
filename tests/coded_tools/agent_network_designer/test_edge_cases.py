@@ -33,15 +33,17 @@ from typing import Any
 
 import pytest
 
+from coded_tools.agent_network_designer.knowledge_pack import UNLOADED_BAD_SEPARATOR
 from coded_tools.agent_network_designer.knowledge_pack import UNLOADED_NO_TEXT
+from coded_tools.agent_network_designer.knowledge_pack import UNLOADED_NOT_A_BULLET
 from coded_tools.agent_network_designer.knowledge_pack import UNLOADED_OFF_PATTERN
 from coded_tools.agent_network_designer.knowledge_pack import KnowledgePack
 from coded_tools.agent_network_designer.knowledge_pack import PackManifest
 from coded_tools.agent_network_designer.knowledge_pack import Standard
-from coded_tools.agent_network_designer.knowledge_pack import discover_domains
-from coded_tools.agent_network_designer.knowledge_pack import load_pack
 from coded_tools.agent_network_designer.knowledge_pack import normalise
 from coded_tools.agent_network_designer.knowledge_pack import parse_standards
+from coded_tools.agent_network_designer.pack_catalogue import discover_domains
+from coded_tools.agent_network_designer.pack_catalogue import load_pack
 from coded_tools.agent_network_designer.standards_verifier import extract_embedded_standards
 from coded_tools.agent_network_designer.standards_verifier import network_definition_from_hocon
 from coded_tools.agent_network_designer.standards_verifier import render_report
@@ -149,6 +151,158 @@ def test_edge_a4_an_unparseable_id_pattern_does_not_crash_the_load(tmp_path):
     pack: KnowledgePack = load_pack("badregex", tmp_path)
 
     assert any("not a valid regular expression" in problem for problem in pack.validate_errors())
+
+
+def test_edge_a4b_prose_rules_after_a_standard_are_reported_not_dropped(tmp_path):
+    """
+    The silent partial loss: id'd bullets load, prose rules beside them vanish, nothing is said.
+
+    This was the sharpest gap in the pack layer. A document mixing both loaded its bullets, threw
+    the prose away, and reported no problem at all - so an author saw a green result for a pack
+    that had lost half its rules. Same family as the off-pattern id and the empty body, one link
+    further out.
+
+    It is a WARNING rather than an error deliberately: prose after the bullets may legitimately be
+    a closing note, and only the author can tell. Certainty is reserved for lines carrying an id.
+    """
+    write_pack(
+        tmp_path,
+        "mixed",
+        "- HR-01: Never deploy on a Friday.\n- HR-02: Take a backup first.\n\n"
+        "All changes must additionally be approved by the CAB.\n"
+        "A rollback plan is mandatory for production.\n",
+        "- V1 | q | examples: e | why: w\n",
+        manifest='{ domain_id = "mixed"\n version = "1.0"\n standard_id_pattern = "HR-\\\\d{2}" }\n',
+    )
+    pack: KnowledgePack = load_pack("mixed", tmp_path)
+
+    assert [standard.standard_id for standard in pack.standards] == ["HR-01", "HR-02"]
+    assert [line for _, line in pack.unaccounted_lines] == [
+        "All changes must additionally be approved by the CAB.",
+        "A rollback plan is mandatory for production.",
+    ]
+    warnings: list[str] = pack.validate_warnings()
+    assert any("line 4" in warning and "CAB" in warning for warning in warnings)
+    # A heuristic must not gate verification, so this stays out of the errors.
+    assert not pack.validate_errors()
+
+
+def test_edge_a4c_a_preamble_before_the_first_standard_is_not_a_dropped_rule(tmp_path):
+    """
+    The counterpart to a4b, and the reason its rule is positional rather than about wording.
+
+    Every shipped pack opens with explanatory prose, and all three contain the word "must" - so
+    any modal-verb heuristic would fire on our own exemplars. What separates a preamble from a
+    dropped rule is position: a preamble precedes the first standard by convention.
+    """
+    write_pack(
+        tmp_path,
+        "preamble",
+        "# Standards\n\nNon-negotiable. Each standard must be embedded verbatim, with its id.\n\n"
+        "- HR-01: Never deploy on a Friday.\n",
+        "- V1 | q | examples: e | why: w\n",
+        manifest='{ domain_id = "preamble"\n version = "1.0"\n standard_id_pattern = "HR-\\\\d{2}" }\n',
+    )
+    pack: KnowledgePack = load_pack("preamble", tmp_path)
+
+    assert [standard.standard_id for standard in pack.standards] == ["HR-01"]
+    assert not pack.unaccounted_lines
+    assert not pack.validate_warnings()
+
+
+def test_edge_a4d_an_id_separated_by_an_em_dash_is_reported_not_dropped(tmp_path):
+    """
+    ``- HR-01 - take a backup`` is a punctuation slip, not prose. The id makes it unambiguous.
+    """
+    write_pack(
+        tmp_path,
+        "dash",
+        "- HR-01 — Never deploy on a Friday.\n",
+        "- V1 | q | examples: e | why: w\n",
+        manifest='{ domain_id = "dash"\n version = "1.0"\n standard_id_pattern = "HR-\\\\d{2}" }\n',
+    )
+    pack: KnowledgePack = load_pack("dash", tmp_path)
+
+    assert not pack.standards
+    assert ("HR-01", UNLOADED_BAD_SEPARATOR) in pack.unloaded_standards
+    assert any("HR-01" in problem and "NOT loaded" in problem for problem in pack.validate_errors())
+
+
+def test_edge_a4e_a_numbered_list_is_reported_not_dropped(tmp_path):
+    """
+    ``1. HR-01: text`` reads as a standards list to a human. _iter_bullets never sees the line,
+    so before this every rule in a numbered document was dropped in silence.
+    """
+    write_pack(
+        tmp_path,
+        "numbered",
+        "1. HR-01: Never deploy on a Friday.\n2. HR-02: Take a backup first.\n",
+        "- V1 | q | examples: e | why: w\n",
+        manifest='{ domain_id = "numbered"\n version = "1.0"\n standard_id_pattern = "HR-\\\\d{2}" }\n',
+    )
+    pack: KnowledgePack = load_pack("numbered", tmp_path)
+
+    assert not pack.standards
+    assert pack.unloaded_standards == [("HR-01", UNLOADED_NOT_A_BULLET), ("HR-02", UNLOADED_NOT_A_BULLET)]
+    errors: list[str] = pack.validate_errors()
+    assert any("HR-01" in problem and "markdown bullet" in problem for problem in errors)
+    # And the headline message must not misdiagnose a mis-shaped list as a prose document.
+    assert any("ids appear in the file" in problem for problem in errors)
+
+
+def test_edge_a4f_a_prose_document_says_it_is_a_document_and_offers_the_way_out(tmp_path):
+    """
+    The first-contact case: someone pastes an SOP in. The old message said "no operating standards
+    found", which is true and useless - the file is full of rules. It must name the expected shape.
+    """
+    write_pack(
+        tmp_path,
+        "prosedoc",
+        "# Change SOP\n\nAll production changes require an approved change record before work begins.\n"
+        "A verified restore point must exist prior to any schema change.\n",
+        "- V1 | q | examples: e | why: w\n",
+        manifest='{ domain_id = "prosedoc"\n version = "1.0"\n standard_id_pattern = "HR-\\\\d{2}" }\n',
+    )
+    pack: KnowledgePack = load_pack("prosedoc", tmp_path)
+    errors: list[str] = pack.validate_errors()
+
+    assert any("document rather than a standards list" in problem for problem in errors)
+    assert any("2 lines of prose" in problem for problem in errors)
+    assert any("- <ID>: <the rule, word for word>" in problem for problem in errors)
+
+
+def test_edge_a4g_bullets_without_ids_are_told_they_need_ids(tmp_path):
+    """
+    Bulleted but unnumbered is the other common first attempt, and it needs different advice from
+    a prose document: the shape is right, the ids are missing.
+    """
+    write_pack(
+        tmp_path,
+        "noids",
+        "- Never deploy on a Friday.\n- Take a backup first.\n",
+        "- V1 | q | examples: e | why: w\n",
+        manifest='{ domain_id = "noids"\n version = "1.0"\n standard_id_pattern = "HR-\\\\d{2}" }\n',
+    )
+    pack: KnowledgePack = load_pack("noids", tmp_path)
+    errors: list[str] = pack.validate_errors()
+
+    assert any("2 bullets, none carrying an id" in problem for problem in errors)
+    assert not any("document rather than a standards list" in problem for problem in errors)
+
+
+def test_edge_a4h_a_singular_count_reads_as_singular(tmp_path):
+    """These messages are read by domain experts; "1 bullets" says nobody proof-read them."""
+    write_pack(
+        tmp_path,
+        "onebullet",
+        "- Never deploy on a Friday.\n",
+        "- V1 | q | examples: e | why: w\n",
+        manifest='{ domain_id = "onebullet"\n version = "1.0"\n standard_id_pattern = "HR-\\\\d{2}" }\n',
+    )
+    pack: KnowledgePack = load_pack("onebullet", tmp_path)
+
+    assert any("1 bullet," in problem for problem in pack.validate_errors())
+    assert not any("1 bullets" in problem for problem in pack.validate_errors())
 
 
 def test_edge_a5_an_organisations_own_id_scheme_works_unchanged(tmp_path):

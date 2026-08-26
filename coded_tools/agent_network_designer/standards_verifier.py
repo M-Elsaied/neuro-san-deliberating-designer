@@ -58,9 +58,9 @@ from typing import Any
 from pyhocon import ConfigFactory
 
 from coded_tools.agent_network_designer.knowledge_pack import KnowledgePack
-from coded_tools.agent_network_designer.knowledge_pack import discover_domains
-from coded_tools.agent_network_designer.knowledge_pack import load_pack
 from coded_tools.agent_network_designer.knowledge_pack import normalise
+from coded_tools.agent_network_designer.pack_catalogue import discover_domains
+from coded_tools.agent_network_designer.pack_catalogue import load_pack
 
 # A standard as embedded in a generated agent's instructions.
 #
@@ -386,14 +386,18 @@ def main(argv: list[str] | None = None) -> int:
         description="Verify that a generated agent network carries its domain's operating standards."
     )
     parser.add_argument("network", help="path to a generated agent network .hocon file")
-    parser.add_argument("--domain", required=True, help=f"curated domain; available: {', '.join(discover_domains())}")
+    # The domain list is NOT interpolated into this help text: building it walks the knowdocs root,
+    # which made even `--help` pay for a filesystem scan. An unknown domain is named on the error
+    # path below instead, which is where someone actually needs to be told what exists.
+    parser.add_argument("--domain", required=True, help="curated domain to verify against")
     parser.add_argument("--knowdocs", default=None, help="override the knowdocs root")
     arguments = parser.parse_args(argv)
 
     try:
         pack: KnowledgePack = load_pack(arguments.domain, arguments.knowdocs)
     except (FileNotFoundError, OSError) as exception:
-        print(f"Error: {exception}", file=sys.stderr)
+        available: str = ", ".join(discover_domains(arguments.knowdocs)) or "none"
+        print(f"Error: {exception}\nAvailable curated domains: {available}", file=sys.stderr)
         return 2
 
     try:

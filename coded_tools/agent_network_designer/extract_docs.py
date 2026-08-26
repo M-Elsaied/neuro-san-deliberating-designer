@@ -31,6 +31,7 @@ Domain resolution is delegated to knowledge_pack, so:
     to general knowledge, rather than interviewing the user from the wrong domain's standards.
 """
 
+import asyncio
 import logging
 from typing import Any
 
@@ -38,11 +39,25 @@ from neuro_san.interfaces.coded_tool import CodedTool
 
 from coded_tools.agent_network_designer.knowledge_pack import PACK_PROVENANCE
 from coded_tools.agent_network_designer.knowledge_pack import KnowledgePack
-from coded_tools.agent_network_designer.knowledge_pack import discover_domains
 from coded_tools.agent_network_designer.knowledge_pack import knowdocs_root
-from coded_tools.agent_network_designer.knowledge_pack import load_pack
+from coded_tools.agent_network_designer.pack_catalogue import PackCatalogue
+from coded_tools.agent_network_designer.pack_catalogue import discover_domains
+from coded_tools.agent_network_designer.pack_catalogue import load_pack
 
 logger = logging.getLogger(__name__)
+
+
+def _available_domains() -> str:
+    """
+    Name the curated domains, for an error message that has to be actionable.
+
+    Called only on a miss. Naming what IS available is what turns "no such domain" into something
+    the model can act on, which is why the explicit-miss behaviour is preserved rather than
+    falling back to a default document.
+
+    :return: A comma-separated domain list, or "none".
+    """
+    return ", ".join(discover_domains()) or "none"
 
 
 class ExtractDocs(CodedTool):
@@ -75,19 +90,24 @@ class ExtractDocs(CodedTool):
                 "Error: <error message>"
         """
         domain_id: str | None = args.get("app_name")
-        available: str = ", ".join(discover_domains()) or "none"
 
         logger.debug("############### Curated knowledge reader ###############")
         logger.debug("Domain: %s", domain_id)
 
+        # The available-domain list is built only where it is needed, on the two error paths.
+        # Computed up front it walked the knowdocs root on every successful read as well, to
+        # produce a string that was then thrown away.
         if not domain_id:
-            return f"Error: No domain provided. Available curated domains: {available}"
+            return f"Error: No domain provided. Available curated domains: {_available_domains()}"
 
         try:
             pack: KnowledgePack = load_pack(domain_id)
         except (FileNotFoundError, OSError):
             # An explicit miss, not a fallback: see the module docstring.
-            return f'Error: No curated knowledge for domain "{domain_id}". Available curated domains: {available}'
+            return (
+                f'Error: No curated knowledge for domain "{domain_id}". '
+                f"Available curated domains: {_available_domains()}"
+            )
 
         if not pack.documents:
             return f'ERROR: No knowledge documents found for domain "{domain_id}" under {knowdocs_root()}.'
@@ -115,10 +135,16 @@ class ExtractDocs(CodedTool):
 
     async def async_invoke(self, args: dict[str, Any], sly_data: dict[str, Any]) -> dict[str, Any] | str:
         """
-        Delegates to the synchronous implementation.
+        Read the pack without blocking the event loop on a cold cache.
+
+        Reading a pack whose catalogue is already warm is a dictionary lookup and stays on the
+        loop. A miss reads markdown and extracts any PDF text from disk, which belongs in a
+        worker thread so other conversations are not held up behind it.
 
         :param args: See invoke().
         :param sly_data: See invoke().
         :return: See invoke().
         """
+        if PackCatalogue.peek() is None:
+            return await asyncio.to_thread(self.invoke, args, sly_data)
         return self.invoke(args, sly_data)

@@ -87,9 +87,22 @@ PACK_PROVENANCE: str = "agent_network_pack_provenance"
 # "<id> reads as a standard but <reason>, so it was NOT loaded."
 UNLOADED_OFF_PATTERN: str = "its id falls outside the pack's declared standard_id_pattern"
 UNLOADED_NO_TEXT: str = "it has no text after the id"
+UNLOADED_BAD_SEPARATOR: str = "its id is not followed by a colon or a full stop"
+UNLOADED_NOT_A_BULLET: str = "it is not written as a markdown bullet starting with '- '"
+
+# The shape a standard has to take to be loaded at all. Quoted in every diagnostic that reports
+# a rule the parser could not see, because "no standards found" without the expected shape is a
+# complaint rather than an instruction.
+EXPECTED_STANDARD_SHAPE: str = "- <ID>: <the rule, word for word>"
 
 _DOCUMENT_SUFFIXES: tuple[str, ...] = (".md", ".txt", ".pdf")
+# Documents plus the manifest: everything a loaded pack is built from, and therefore everything
+# whose modification has to invalidate the cached catalogue.
+_FINGERPRINTED_SUFFIXES: tuple[str, ...] = _DOCUMENT_SUFFIXES + (".hocon",)
 _BULLET_RE: re.Pattern = re.compile(r"^\s*[-*]\s+")
+# A numbered-list prefix, stripped before looking for an id so "1. ABC-01: text" is recognised
+# as an attempt at a standard rather than passing as prose.
+_NUMBERED_PREFIX_RE: re.Pattern = re.compile(r"^\s*\d+[.)]\s+")
 
 
 # --------------------------------------------------------------------------------------
@@ -127,6 +140,20 @@ def normalise(text: str) -> str:
     for original, replacement in replacements.items():
         text = text.replace(original, replacement)
     return re.sub(r"\s+", " ", text).strip()
+
+
+def _plural(count: int, noun: str) -> str:
+    """
+    Render a count with its noun, singular or plural.
+
+    These messages are read by domain experts rather than developers, so "1 bullets" is a small
+    but real signal that nobody proof-read the thing telling them their document is wrong.
+
+    :param count: How many.
+    :param noun: The singular noun.
+    :return: For example "1 bullet" or "7 bullets".
+    """
+    return f"{count} {noun}" if count == 1 else f"{count} {noun}s"
 
 
 def _iter_bullets(text: str) -> Iterator[str]:
@@ -237,6 +264,9 @@ class KnowledgePack:
     # (id, reason) for bullets that read as a standard but were NOT loaded. Kept so validate() can
     # report them rather than let a rule vanish in silence between the document and the network.
     unloaded_standards: list[tuple[str, str]] = field(default_factory=list)
+    # (line number, text) for prose following the first standard - a rule the parser dropped, or
+    # a closing note. Warned about rather than raised, since only the author can tell which.
+    unaccounted_lines: list[tuple[int, str]] = field(default_factory=list)
 
     @property
     def domain_id(self) -> str:
@@ -309,13 +339,70 @@ class KnowledgePack:
             problems.append((PROBLEM_WARNING, f"{domain}: {MANIFEST_FILENAME} declares no version."))
 
         if not self.standards:
-            problems.append((PROBLEM_ERROR, f"{domain}: no operating standards found in {STANDARDS_FILENAME}."))
+            problems.append((PROBLEM_ERROR, f"{domain}: {self._no_standards_diagnosis()}"))
         if not self.open_variables:
             problems.append((PROBLEM_WARNING, f"{domain}: no open variables found in {VARIABLES_FILENAME}."))
+
+        # Prose after the first standard: either a rule the parser dropped or a closing note.
+        # Only the author can tell which, so this names the lines and leaves the judgement there.
+        for line_number, line in self.unaccounted_lines:
+            problems.append(
+                (
+                    PROBLEM_WARNING,
+                    f"{domain}: {STANDARDS_FILENAME} line {line_number} follows a standard but was not "
+                    f"read as one: {line!r}. If it is a rule, write it as '{EXPECTED_STANDARD_SHAPE}'.",
+                )
+            )
 
         problems.extend(self._standard_problems())
         problems.extend(self._open_variable_problems())
         return problems
+
+    def _no_standards_diagnosis(self) -> str:
+        """
+        Say why no standards were found, not merely that none were.
+
+        One message covered five materially different situations - a prose document, a bulleted
+        list with no ids, ids in the wrong shape, an empty file, a missing file - and named none
+        of them. An author whose file is full of rules being told there are none has been given
+        a complaint rather than something to act on.
+
+        :return: The message body, without the leading domain name.
+        """
+        text: str = self.documents.get(STANDARDS_FILENAME, "")
+        if not text.strip():
+            return f"{STANDARDS_FILENAME} is empty or missing."
+
+        bullets: int = sum(1 for _ in _iter_bullets(text))
+        prose_lines: int = sum(
+            1
+            for line in text.splitlines()
+            if line.strip() and not line.strip().startswith("#") and not _BULLET_RE.match(line)
+        )
+        has_id: bool = re.search(DEFAULT_STANDARD_ID_PATTERN, text) is not None
+        advice: str = (
+            f"Write each rule as '{EXPECTED_STANDARD_SHAPE}', or extract them from the source "
+            f"document you already have."
+        )
+
+        preamble: str = f"no operating standards were loaded from {STANDARDS_FILENAME}"
+        if has_id:
+            # Ids are present, so this is a standards list in the wrong shape rather than a
+            # document. Saying "it is a document" here would send the author to the extractor
+            # when all they need is to fix the punctuation or add the bullet marker.
+            return (
+                f"{preamble}: ids appear in the file, so these are standards written in a shape "
+                f"the parser cannot read. The errors below name each one. {advice}"
+            )
+        if bullets:
+            return (
+                f"{preamble}: it has {_plural(bullets, 'bullet')}, none carrying an id. A rule "
+                f"needs a stable id so it can be traced into the network it is embedded in. {advice}"
+            )
+        return (
+            f"{preamble}: it has no bullets and {_plural(prose_lines, 'line')} of prose, so it is "
+            f"a document rather than a standards list. {advice}"
+        )
 
     def _standard_problems(self) -> list[tuple[str, str]]:
         """
@@ -437,12 +524,12 @@ def knowdocs_root(root: str | os.PathLike | None = None) -> Path:
     return DEFAULT_KNOWDOCS_ROOT
 
 
-def discover_domains(root: str | os.PathLike | None = None) -> list[str]:
+def read_domains(root: str | os.PathLike | None = None) -> list[str]:
     """
-    List the domains available under the knowdocs root.
+    Walk the knowdocs root for domain directories.
 
-    A domain is any immediate subdirectory holding at least one readable document. Nothing is
-    registered in Python, so adding a domain is a filesystem operation: no code change, no fork.
+    Reads the filesystem every call. Callers wanting the cached catalogue should use
+    pack_catalogue.discover_domains instead.
 
     :param root: The knowdocs root, or None to resolve it.
     :return: Sorted domain identifiers.
@@ -562,16 +649,105 @@ def find_unloaded_standards(text: str, id_pattern: str) -> list[tuple[str, str]]
         declared = re.compile(f"^(?:{DEFAULT_STANDARD_ID_PATTERN})$")
 
     unloaded: list[tuple[str, str]] = []
+    seen_in_bullets: set[str] = set()
+    # A bullet whose id is followed by something that is not a colon or a full stop. The id is
+    # unmistakable, so the separator is a typo rather than prose - "- ODB-03 - take a backup"
+    # would otherwise be dropped in full silence.
+    bad_separator: re.Pattern = re.compile(rf"^({DEFAULT_STANDARD_ID_PATTERN})\s*[^\s:.].*$", re.DOTALL)
     for bullet in _iter_bullets(text):
-        match: re.Match | None = permissive.match(bullet.strip())
+        stripped: str = bullet.strip()
+        match: re.Match | None = permissive.match(stripped)
         if match is None:
+            separator_match: re.Match | None = bad_separator.match(stripped)
+            if separator_match is not None:
+                candidate = separator_match.group(1).strip()
+                seen_in_bullets.add(candidate)
+                unloaded.append((candidate, UNLOADED_BAD_SEPARATOR))
             continue
         candidate: str = match.group(1).strip()
+        seen_in_bullets.add(candidate)
         if not declared.match(candidate):
             unloaded.append((candidate, UNLOADED_OFF_PATTERN))
         elif not match.group(2).strip():
             unloaded.append((candidate, UNLOADED_NO_TEXT))
+
+    unloaded.extend(_find_ids_outside_bullets(text, permissive, seen_in_bullets))
     return unloaded
+
+
+def _find_ids_outside_bullets(text: str, permissive: re.Pattern, already_seen: set[str]) -> list[tuple[str, str]]:
+    """
+    Find id-bearing lines that are not markdown bullets, so _iter_bullets never sees them.
+
+    A numbered list ("1. ABC-01: text") or a bare line ("ABC-01: text") reads to a human as a
+    perfectly good standards document, but the bullet requirement means not one rule is loaded
+    and, before this, not one was reported either. Only lines carrying a PREFIX-digits id are
+    considered, so genuine prose is untouched.
+
+    :param text: The markdown document text.
+    :param permissive: Compiled id-and-body matcher, shared with the caller.
+    :param already_seen: Ids found in bullets, which must not be reported twice.
+    :return: (id, reason) pairs in document order.
+    """
+    found: list[tuple[str, str]] = []
+    for raw_line in text.splitlines():
+        stripped: str = raw_line.strip()
+        if not stripped or stripped.startswith("#") or stripped.startswith(">"):
+            continue
+        if _BULLET_RE.match(raw_line):
+            continue
+        match: re.Match | None = permissive.match(_NUMBERED_PREFIX_RE.sub("", stripped))
+        if match is None:
+            continue
+        candidate: str = match.group(1).strip()
+        if candidate in already_seen:
+            # The same id also appears in a real bullet: it is a cross-reference in prose, not a
+            # second definition, and the bullet is what counts.
+            continue
+        already_seen.add(candidate)
+        found.append((candidate, UNLOADED_NOT_A_BULLET))
+    return found
+
+
+def find_unaccounted_lines(text: str) -> list[tuple[int, str]]:
+    """
+    Find prose that follows the first standard, which is where a dropped rule tends to hide.
+
+    _iter_bullets deliberately discards prose so a pack can carry an explanatory preamble, and
+    that is load-bearing - every shipped pack opens with one. But it means a document mixing
+    id'd bullets with prose rules loads the bullets, drops the prose, and reports nothing at
+    all: partial silent loss, which is the failure this whole design exists to prevent.
+
+    The rule that separates the two cases without guessing at meaning: a preamble sits BEFORE
+    the first standard by convention, so prose before the first bullet is expected and prose
+    after it is suspicious. Measured against the three shipped packs, this yields no findings;
+    against a mixed document it yields the dropped lines with their numbers.
+
+    This is a heuristic, and it is reported as a warning rather than an error for that reason -
+    a pack may legitimately end with a closing note. Certainty is reserved for lines that carry
+    an id, which find_unloaded_standards reports as errors.
+
+    :param text: The markdown document text.
+    :return: (line number, text) for each unaccounted line, in document order.
+    """
+    unaccounted: list[tuple[int, str]] = []
+    seen_bullet: bool = False
+    in_bullet: bool = False
+    for line_number, raw_line in enumerate(text.splitlines(), start=1):
+        stripped: str = raw_line.strip()
+        if not stripped or stripped.startswith("#") or stripped.startswith(">"):
+            in_bullet = False
+            continue
+        if _BULLET_RE.match(raw_line):
+            seen_bullet = True
+            in_bullet = True
+            continue
+        if in_bullet:
+            # An indented continuation of the bullet above, which parse_standards does read.
+            continue
+        if seen_bullet:
+            unaccounted.append((line_number, stripped))
+    return unaccounted
 
 
 def parse_open_variables(text: str) -> list[OpenVariable]:
@@ -660,9 +836,12 @@ def _read_pdf(path: Path) -> str:
         return f"ERROR: Error reading PDF {path}: {exception}"
 
 
-def load_pack(domain_id: str, root: str | os.PathLike | None = None) -> KnowledgePack:
+def read_pack(domain_id: str, root: str | os.PathLike | None = None) -> KnowledgePack:
     """
-    Load one pack by domain identifier.
+    Read one pack from disk.
+
+    Reads every document every call. Callers wanting the cached catalogue should use
+    pack_catalogue.load_pack instead.
 
     :param domain_id: The domain identifier - the pack's directory name.
     :param root: The knowdocs root, or None to resolve it.
@@ -683,20 +862,5 @@ def load_pack(domain_id: str, root: str | os.PathLike | None = None) -> Knowledg
         open_variables=parse_open_variables(documents.get(VARIABLES_FILENAME, "")),
         documents=documents,
         unloaded_standards=find_unloaded_standards(standards_text, manifest.standard_id_pattern),
+        unaccounted_lines=find_unaccounted_lines(standards_text),
     )
-
-
-def load_catalogue(root: str | os.PathLike | None = None) -> list[KnowledgePack]:
-    """
-    Load every discoverable pack.
-
-    :param root: The knowdocs root, or None to resolve it.
-    :return: The loaded packs, ordered by domain id.
-    """
-    packs: list[KnowledgePack] = []
-    for domain_id in discover_domains(root):
-        try:
-            packs.append(load_pack(domain_id, root))
-        except (FileNotFoundError, OSError):
-            continue
-    return packs
