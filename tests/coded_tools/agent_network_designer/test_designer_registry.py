@@ -348,6 +348,23 @@ def test_a_default_is_recorded_as_assumed_and_not_as_an_answer(front_man):
     assert 'never record a default through action "answer" instead' in phase_a
 
 
+def test_the_brief_takes_its_answers_from_the_log_not_from_memory(front_man):
+    """
+    The gap where the computed interview met a recalled document.
+
+    Holding the answers in a tool is worth nothing if the brief - the thing the user actually reads
+    and approves - is still composed from a recollection of the conversation. The failure it lets
+    through is the worst one available: an answer the user went back and corrected reaching the
+    brief with its old value, so going back appears to have worked while the mistake it was meant
+    to fix is what gets approved.
+    """
+    phase_a: str = collapse(str(front_man.get("instructions") or "")).split("PHASE B")[0]
+
+    assert "take the brief's two answer sections from InterviewLog, not from your memory" in phase_a
+    assert '"confirmed" is the list for "Confirmed requirements"' in phase_a
+    assert '"assumed" is the list for "Assumptions I made"' in phase_a
+
+
 def test_the_designer_is_told_to_discover_the_catalogue_before_matching(front_man):
     """
     Discovery is worthless if the prompt still assumes it knows what exists.

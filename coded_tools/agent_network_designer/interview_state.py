@@ -343,6 +343,29 @@ class InterviewState:
         """
         return tuple(entry for entry in self.entries if entry.answered or entry.label == self.current.label)
 
+    def brief_lines(self) -> tuple[list[str], list[str]]:
+        """
+        The two sections of the design brief that must not be written from memory.
+
+        The brief is the document the user reads and approves, and its whole claim is that a reader
+        can tell what they confirmed from what the designer assumed. Both halves of that were still
+        being composed from a recollection of the conversation - so an answer the user had gone back
+        and CORRECTED could reach the brief with its old value, which would make going back look
+        like it worked while approving the mistake it was meant to fix. Everything needed is already
+        on file here, exactly once, with the assumed flag set where a default was taken.
+
+        Only answered entries appear: an unanswered one belongs in neither section.
+
+        :return: The confirmed lines and the assumed lines, each "<subject>: <answer>".
+        """
+        confirmed: list[str] = []
+        assumed: list[str] = []
+        for entry in self.entries:
+            if not entry.answered:
+                continue
+            (assumed if entry.assumed else confirmed).append(f"{entry.subject}: {entry.answer}")
+        return confirmed, assumed
+
     @property
     def outstanding(self) -> tuple[Entry, ...]:
         """:return: Entries with no answer on file, in order."""

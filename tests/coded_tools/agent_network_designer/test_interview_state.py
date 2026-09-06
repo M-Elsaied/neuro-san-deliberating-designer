@@ -441,6 +441,52 @@ def test_the_log_shows_only_what_has_been_asked(pack):
     assert "not yet answered" in state.log_lines()[-1]
 
 
+def test_a_corrected_answer_is_the_one_that_reaches_the_brief(pack):
+    """
+    What going back is FOR, at the only point where it finally matters.
+
+    An answer corrected mid-interview but recalled at brief-writing time with its old value would
+    make going back appear to work while the user approves the mistake it was meant to fix. So the
+    brief's two sections are derived from the entries, where a correction has already replaced the
+    value in place, rather than assembled from a reading of the conversation.
+    """
+    state: InterviewState = play(begin(pack), "1", "1", "1")
+    original: str = state.entries[2].answer
+
+    state, _ = state.go_back("Q3")
+    state, _ = state.record("2")
+    confirmed, assumed = state.brief_lines()
+
+    assert not assumed
+    assert not any(original in line for line in confirmed), "the superseded answer reached the brief"
+    assert any(state.entries[2].answer in line for line in confirmed)
+    assert len(confirmed) == 3, "the brief listed an answer nobody gave"
+
+
+def test_the_brief_separates_what_was_given_from_what_was_defaulted(pack):
+    """
+    The brief's whole claim, held as data rather than as a judgement made while writing it.
+    """
+    state: InterviewState = begin(pack)
+    state, _ = state.record("1")
+    state, _ = state.assume("a default nobody was asked for")
+    confirmed, assumed = state.brief_lines()
+
+    assert len(confirmed) == 1 and len(assumed) == 1
+    assert "a default nobody was asked for" in assumed[0]
+    assert not any("a default nobody was asked for" in line for line in confirmed)
+
+
+def test_an_unanswered_question_is_in_neither_brief_section(pack):
+    """
+    Every entry exists from the start so labels stay stable, so the brief has to filter.
+    """
+    state: InterviewState = play(begin(pack), "1")
+    confirmed, assumed = state.brief_lines()
+
+    assert len(confirmed) + len(assumed) == 1, "the brief reported an answer that was never given"
+
+
 # --------------------------------------------------------------------------------------
 # Carrying the state between turns
 # --------------------------------------------------------------------------------------

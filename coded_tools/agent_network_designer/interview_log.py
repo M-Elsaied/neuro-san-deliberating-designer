@@ -96,6 +96,10 @@ class InterviewLog(CodedTool):
                 - "prompt" (str): the text to print verbatim, when there is something to ask.
                 - "label" (str): the entry the status refers to.
                 - "log" (list): the answer log, one line per entry asked so far.
+                - "confirmed" (list): the answers the user gave, as "<subject>: <answer>", for the
+                  brief's "Confirmed requirements" section.
+                - "assumed" (list): the defaults the designer chose, same shape, for the brief's
+                  "Assumptions I made" section.
                 - "outstanding" (int): how many open variables still have no answer.
                 - "candidates" (list): the options a reply was tied between, when status is
                   "ambiguous" or "choose".
@@ -187,11 +191,17 @@ class InterviewLog(CodedTool):
         :return: The payload described in invoke().
         """
         prompt: str = outcome.prompt or (state.render() if outcome.status in (LOG, START) else "")
+        confirmed, assumed = state.brief_lines()
         return {
             "status": outcome.status,
             "prompt": prompt,
             "label": outcome.entry.label if outcome.entry is not None else state.current.label,
             "log": state.log_lines(),
+            # The brief's two most consequential sections, computed rather than recalled. Returned
+            # on every action, not just "log", so the designer never has a reason to reconstruct
+            # them from the conversation - which is where a corrected answer would go missing.
+            "confirmed": confirmed,
+            "assumed": assumed,
             "outstanding": len(state.outstanding),
             "candidates": list(outcome.candidates),
             "note": outcome.note,

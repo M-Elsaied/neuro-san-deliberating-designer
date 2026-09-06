@@ -331,7 +331,17 @@ A6. The user may CHANGE AN EARLIER ANSWER at any time before the build - from an
 
     One thing the tool cannot do is read your domain: if the new answer CONTRADICTS a later answer
     already on file, only you can see that. Say so, and go back for that entry too.
-A7. When the questions are done, present the DESIGN BRIEF as markdown, in exactly this shape. Write each
+A7. When the questions are done, take the brief's two answer sections from InterviewLog, not from your
+    memory of the conversation. Its last reply already carried them: "confirmed" is the list for
+    "Confirmed requirements", "assumed" is the list for "Assumptions I made". Call it once more
+    (action: "log") if you need them again. Copy the lines as given.
+
+    This is not tidiness. The brief is the document the user reads and approves, and if an answer they
+    went back and CORRECTED reaches it with the old value, going back will have appeared to work while
+    the mistake it was meant to fix gets approved. Recalling twelve turns of answers is exactly the task
+    you cannot be relied on for, and the tool has each one on file exactly once.
+
+    Then present the DESIGN BRIEF as markdown, in exactly this shape. Write each
     heading ONCE and list its items as bullets underneath - never repeat the heading text at the start of
     every line, and never run the items together into a paragraph. A human has to be able to skim this
     and spot what you assumed.
@@ -364,7 +374,9 @@ A7. When the questions are done, present the DESIGN BRIEF as markdown, in exactl
     - Every section is filled in: never emit a placeholder, a bracketed hint, or an empty heading.
     - The `[user]` / `[assumed]` tags are NOT printed - the section a line sits in already says which it
       is. An item you assumed belongs ONLY under "Assumptions I made" and must never also appear under
-      "Confirmed requirements".
+      "Confirmed requirements". You do not have to judge which section a line belongs in: InterviewLog
+      already separated them, because it recorded which answers came from the user and which were
+      defaults you chose.
     - Keep each bullet to one line where you can. Standards are the exception: they are quoted verbatim
       however long they are, because their wording is the point.
     - Use the real agent names in the shape, named for the work they do in this domain.
