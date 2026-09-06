@@ -37,6 +37,8 @@ from coded_tools.agent_network_designer.interview_review import load_transcript
 from coded_tools.agent_network_designer.interview_review import main
 from coded_tools.agent_network_designer.interview_review import render_report
 from coded_tools.agent_network_designer.interview_review import review_interview
+from coded_tools.agent_network_designer.interview_state import begin
+from coded_tools.agent_network_designer.interview_state import offered_options
 from coded_tools.agent_network_designer.knowledge_pack import KnowledgePack
 from coded_tools.agent_network_designer.pack_catalogue import load_catalogue
 from coded_tools.agent_network_designer.pack_catalogue import load_pack
@@ -298,6 +300,32 @@ def test_going_back_is_not_a_way_to_get_a_network_built_early(pack, other_ids):
     assert any("built the network after the user asked to change" in problem for problem in kinds(result, "REVISION"))
 
 
+def test_resuming_after_a_correction_does_not_count_the_question_twice(pack, other_ids):
+    """
+    The counting rule a real correction exposed.
+
+    Going back leaves a question on screen unanswered, so after the correction the interview
+    resumes by asking it again - correctly. Counting question TURNS would read that as an interview
+    that overran the pack and report the extras as not coming from curated knowledge, which would
+    punish exactly the behaviour the prompt now requires. Distinct questions, not turns.
+    """
+    escape: str = "I am not sure - choose a sensible default for me"
+    asked: str = question("Which window applies?", "a", "b", escape)
+    turns: list[Turn] = [
+        Turn(role="designer", text=asked),
+        Turn(role="user", text="go back"),
+        Turn(role="designer", text="Q1. Subject - a\n\n" + question("Back to Q1?", "a", "b", escape)),
+        Turn(role="user", text="b"),
+        # Resuming: the same question as before, with a line saying what changed in front of it.
+        Turn(role="designer", text="Changed Q1 to b.\n\n" + asked),
+    ]
+    result: InterviewResult = review_interview(turns, pack, other_ids)
+
+    assert result.questions_asked == 1, result.problems()
+    assert result.revisits == 1
+    assert not kinds(result, "INTERVIEW"), "an honest correction was reported as an overrun"
+
+
 def test_ignoring_an_ambiguous_answer_still_costs_a_question(pack, other_ids):
     """
     A turn that asked the NEXT question instead of re-asking is a new question, and is counted.
@@ -309,6 +337,25 @@ def test_ignoring_an_ambiguous_answer_still_costs_a_question(pack, other_ids):
 
     assert result.questions_asked == len(pack.open_variables)
     assert result.clarifications == 0
+
+
+def test_the_clean_fixture_is_what_the_state_machine_actually_renders(pack, other_ids):
+    """
+    The fixtures and the running tool must not drift apart.
+
+    The checks below are only worth anything if the transcripts they pass are the transcripts the
+    designer really produces. Since InterviewLog renders the questions now, that is checkable
+    rather than a matter of keeping two files in step by hand: the first question in the clean
+    fixture has to be, character for character, what begin(pack).render() returns.
+    """
+    _, turns = load_transcript(TRANSCRIPTS / "oracle_clean.json")
+    rendered: str = begin(pack).render()
+    first: str = next(turn.text for turn in turns if turn.role == "designer")
+
+    assert first.endswith(rendered), "the fixture's first question is not what the state machine renders"
+    assert offered_options(first) == offered_options(rendered)
+    # And the whole thing still reviews clean, so the renderer satisfies the checks it is checked by.
+    assert review_interview(turns, pack, other_ids).ok
 
 
 def test_a_transcript_that_is_not_a_transcript_is_a_usage_error(tmp_path):

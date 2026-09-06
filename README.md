@@ -42,8 +42,13 @@ Ports already taken? `ns run --nsflow-port 4174 --server-http-port 8081`.
 - **Questions are choices, not prose.** Each one arrives as a numbered list of the pack's own example
   answers, plus *something else* and *not sure* - so you can answer with a number, and an answer that fits
   two of the options is sent back for a choice instead of being resolved by assumption.
-- **You can go back.** Say *go back* at any point before the build, as far as the first question, and only
-  the answer you change is re-asked. A mistyped answer costs one turn, not the session.
+- **You can go back.** Say *go back* at any point before the build - `back three`, `change question 3`, or
+  just name what you got wrong - as far as the first question and as often as you need. Only the answer you
+  change is re-asked; everything else keeps its value and the interview resumes where it left off.
+- **The interview is state, not memory.** The question list, every answer and the current position live in
+  the `InterviewLog` coded tool, not in the model's context. So the options are the pack's own wording by
+  construction, entry labels never shift, and `back three` lands three back - none of which survives being
+  left to a model to remember across a twelve-turn conversation.
 - **Knowledge lives in documents, not in the prompt.** Each domain is a folder - a *knowledge pack* - under
   `coded_tools/agent_network_designer/knowdocs/<domain>/`, read by the `ExtractDocs` coded tool. Packs are
   discovered by scanning that root, so adding a domain is dropping a folder in; point

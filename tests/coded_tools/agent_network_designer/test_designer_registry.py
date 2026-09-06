@@ -279,22 +279,25 @@ def test_phase_b_prints_the_computed_table_and_writes_none_of_its_own(front_man)
     assert "Do NOT write the coverage table yourself" in phase_b
 
 
-def test_every_question_is_a_numbered_choice_with_an_escape(front_man):
+def test_the_interview_is_driven_by_the_tool_rather_than_remembered(front_man):
     """
-    The prompt's half of the fix a live session argued for.
+    The prompt's half of the fix a live session argued for, and the load-bearing part of it.
 
     The designer offered its example answers as prose inside one sentence, the user replied with the
     words two of those examples shared, and it recorded that and moved on - so the built network's
-    approval gate was chosen by the model, and the user was never told a choice existed. The
-    numbering is what lets the user be exact; the escapes are what stop the list narrowing the
-    answer to whatever got enumerated. Both are load-bearing, so both are asserted.
+    approval gate was chosen by the model and the user was never told a choice existed. Telling the
+    model to keep a better log would have been another instruction to drift from; InterviewLog
+    computes the questions, the answers and the position instead, and the prompt's job is now to
+    print what it returns. So what is asserted here is the handover, not the formatting.
     """
-    phase_a: str = collapse(str(front_man.get("instructions") or "")).split("PHASE B")[0]
+    instructions: str = collapse(str(front_man.get("instructions") or ""))
+    phase_a: str = instructions.split("PHASE B")[0]
 
-    assert "Every question is a NUMBERED LIST OF OPTIONS" in phase_a
-    assert "Something else - I will describe it" in phase_a
-    assert "I am not sure - choose a sensible default for me" in phase_a
-    assert "Never invent an option the document does not offer" in phase_a
+    assert "InterviewLog" in phase_a, "Phase A cannot reach the interview state"
+    assert 'print the "prompt" it returns VERBATIM' in phase_a
+    assert "You do NOT keep the answer log yourself" in phase_a
+    assert "never renumber the options, never re-word an option" in phase_a
+    assert "InterviewLog" in front_man.get("tools", []), "the front man is not wired to the tool"
 
 
 def test_an_ambiguous_answer_may_not_be_settled_by_assuming(front_man):
@@ -302,43 +305,47 @@ def test_an_ambiguous_answer_may_not_be_settled_by_assuming(front_man):
     The interview's whole claim is that it separates what you confirmed from what it assumed.
 
     An answer consistent with several offered options, recorded as though it chose one, breaks that
-    claim in the worst available way: it lands under "Confirmed requirements" without the user ever
-    having confirmed it, which is the one place the brief promises never to guess.
+    claim in the worst available way: it lands under "Confirmed requirements" without the user
+    having confirmed it, which is the one place the brief promises never to guess. The tool decides
+    whether a reply was ambiguous, so the prompt's duty is to pass the words through unedited and
+    to obey the answer.
     """
     phase_a: str = collapse(str(front_man.get("instructions") or "")).split("PHASE B")[0]
 
-    assert "NEVER settle an ambiguous answer by assuming" in phase_a
-    assert "consistent with MORE THAN ONE of the options" in phase_a
-    assert "do not move on to the next variable" in phase_a
+    assert 'reply: "<what they said, VERBATIM>"' in phase_a
+    assert "the assumption the tool exists to catch, and it cannot catch what it is not shown" in phase_a
+    assert "The variable is STILL OPEN" in phase_a
+    assert "do not name one of the candidates back as though it had been chosen" in phase_a
 
 
 def test_the_user_can_walk_back_to_any_earlier_answer(front_man):
     """
     An interview that only moves forward makes the first wrong answer unfixable except by starting
-    the session over. The answer log is what makes going back systematic rather than a re-run: the
-    entry labels are stable, so "back three" means something definite, and the answers the change
-    does not touch survive it.
+    the session over. Going back has to be reachable from the prompt, passed to the tool in the
+    user's own words - the tool resolves a count, a label or a topic, and can only notice a count
+    and a topic disagreeing if it sees both - and it must never be read as a request to skip.
     """
-    phase_a: str = collapse(str(front_man.get("instructions") or "")).split("PHASE B")[0]
+    instructions: str = collapse(str(front_man.get("instructions") or ""))
+    phase_a: str = instructions.split("PHASE B")[0]
 
     assert "CHANGE AN EARLIER ANSWER at any time before the build" in phase_a
-    assert "ANSWER LOG" in phase_a
-    assert "There is no limit on how far back" in phase_a
-    assert "never restart the interview" in phase_a
-    assert "Going back to an earlier answer is NOT skipping and is never refused" in phase_a
+    assert 'action: "back", target: "<their words, VERBATIM>"' in phase_a
+    assert "There is no limit on how far back or how many times" in phase_a
+    assert "Going back to an earlier answer is NOT skipping and is never refused" in instructions
 
 
-def test_the_answer_log_cannot_be_mistaken_for_the_options(front_man):
+def test_a_default_is_recorded_as_assumed_and_not_as_an_answer(front_man):
     """
-    Two numbered lists in one reply, and the user answers the wrong one.
+    The one judgement the tool cannot make, and the flag that keeps it honest.
 
-    The log is navigated by label and the options are answered by number, so the prompt labels the
-    log Q1, Q2 - which also keeps the two apart for the transcript checks, where a bare number at
-    the start of a line is how an offered option is recognised.
+    A default is a domain fact, so the model has to choose it - but recording it through the same
+    door as a real answer would make an assumption indistinguishable from a confirmation by the
+    time the brief is written, which is exactly what the brief promises to keep apart.
     """
     phase_a: str = collapse(str(front_man.get("instructions") or "")).split("PHASE B")[0]
 
-    assert 'never as a bare "1.", "2."' in phase_a
+    assert "the tool cannot, because a default is a domain fact and it holds none" in phase_a
+    assert 'never record a default through action "answer" instead' in phase_a
 
 
 def test_the_designer_is_told_to_discover_the_catalogue_before_matching(front_man):

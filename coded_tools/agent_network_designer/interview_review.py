@@ -70,6 +70,12 @@ from dataclasses import field
 from pathlib import Path
 from typing import Any
 
+from coded_tools.agent_network_designer.interview_state import ESCAPE_MARKERS
+from coded_tools.agent_network_designer.interview_state import MIN_OPTIONS
+from coded_tools.agent_network_designer.interview_state import OPTION_PICK_RE
+from coded_tools.agent_network_designer.interview_state import offered_options
+from coded_tools.agent_network_designer.interview_state import option_key
+from coded_tools.agent_network_designer.interview_state import tied_options
 from coded_tools.agent_network_designer.knowledge_pack import KnowledgePack
 from coded_tools.agent_network_designer.knowledge_pack import normalise
 
@@ -121,22 +127,6 @@ COMPUTED_TABLE_MARKERS: tuple[str, ...] = ("Role", "Fidelity")
 # plainly interviewing from somewhere other than the curated document. Two allows for a
 # clarification and a confirmation without allowing an invented interview.
 QUESTION_ALLOWANCE: int = 2
-
-# One offered option: "  1. ServiceNow CR approved by CAB". The number must open the line, because
-# an enumerated choice the user can answer by number is the whole point - a digit buried in a
-# sentence is prose again.
-OPTION_RE: re.Pattern = re.compile(r"^[ \t]*\d{1,2}[.)][ \t]+(?P<text>\S[^\n]*)$", re.MULTILINE)
-
-# How the user names an option instead of retyping it: "2", "option 2", "#2", "2 and 3".
-OPTION_PICK_RE: re.Pattern = re.compile(r"(?:^|\b)(?:option[ \t]*|#)?(\d{1,2})\b")
-
-# The escapes that stop a numbered list from narrowing the answer to whatever the designer listed.
-# Without one of these on offer, a user whose situation is not in the list has no honest reply, and
-# picking the closest wrong option is exactly the silent guess the numbering exists to prevent.
-ESCAPE_MARKERS: tuple[str, ...] = ("not sure", "something else", "you decide", "sensible default", "don't know")
-
-# The fewest options that make a choice: two real answers plus at least one escape.
-MIN_OPTIONS: int = 3
 
 # How the user asks to correct an earlier answer. Kept broad on purpose: a user fixing a mistake
 # phrases it however it occurs to them, and the one reply that must never happen is the designer
@@ -299,29 +289,6 @@ def _find_approval(turns: list[Turn]) -> int:
     return -1
 
 
-def _offered_options(text: str) -> list[str]:
-    """
-    :param text: A designer turn.
-    :return: The text of each numbered option the turn offered, in order.
-    """
-    return [match.group("text").strip() for match in OPTION_RE.finditer(text)]
-
-
-def _key(text: str) -> str:
-    """
-    Reduce an answer or an option to comparable characters only.
-
-    Letters and digits, lowercased, everything else dropped - so "service now CR" and
-    "ServiceNow CR" are the same key. That matters here specifically: the shortenings a user
-    actually types differ from the curated wording in spacing and punctuation far more often than
-    in words, and a check that missed them would miss the case it exists for.
-
-    :param text: Any fragment.
-    :return: The comparison key.
-    """
-    return re.sub(r"[^a-z0-9]+", "", text.lower())
-
-
 def _picked_a_number(reply: str, option_count: int) -> bool:
     """
     :param reply: What the user said.
@@ -329,37 +296,6 @@ def _picked_a_number(reply: str, option_count: int) -> bool:
     :return: True if the reply names at least one of the offered option numbers.
     """
     return any(1 <= int(match.group(1)) <= option_count for match in OPTION_PICK_RE.finditer(reply))
-
-
-def _ambiguous_candidates(reply: str, options: list[str]) -> list[str]:
-    """
-    Find the options a reply is consistent with but does not choose between.
-
-    The test is deliberately narrow: the reply's key must be a proper substring of the option's
-    key - the reply says LESS than the option, and everything it does say the option also says.
-    "service now cr" is a substring of both "servicenow cr approved by cab" and "servicenow cr
-    approved by the app owner", so it settles nothing; "dba team takes the rman backup" is a
-    substring of nothing on offer, so it is a free-form answer and not this function's business.
-
-    Narrow on purpose. A broader notion of ambiguity would need judgement, and a check that fires
-    on ordinary answers teaches a reader to ignore it. This fires on one shape - a shortening that
-    fits several offered options - which is the shape that gets silently guessed.
-
-    :param reply: What the user said.
-    :param options: The options the previous designer turn offered.
-    :return: The tied options, or an empty list when the reply settles the question.
-    """
-    reply_key: str = _key(reply)
-    if not reply_key:
-        return []
-    tied: list[str] = []
-    for option in options:
-        option_key: str = _key(option)
-        if any(marker in option.lower() for marker in ESCAPE_MARKERS):
-            continue
-        if reply_key != option_key and reply_key in option_key:
-            tied.append(option)
-    return tied if len(tied) > 1 else []
 
 
 def _is_back_request(text: str) -> bool:
@@ -388,6 +324,23 @@ def _is_refusal_reply(turns: list[Turn], index: int) -> bool:
     return any(request in lowered for request in SKIP_REQUESTS)
 
 
+def _question_key(text: str) -> str:
+    """
+    Identify the question a turn asks, so the same one asked twice is recognised as one question.
+
+    The first line carrying a question mark, reduced to comparable characters. A turn can lead with
+    a sentence of its own - "Changed Q3 to ..." before resuming - so the key comes from the
+    question rather than the turn.
+
+    :param text: A designer turn.
+    :return: The key, or "" when the turn asks nothing.
+    """
+    for line in text.split("\n"):
+        if "?" in line:
+            return option_key(line)
+    return ""
+
+
 def _check_one_question_at_a_time(
     turns: list[Turn], brief_index: int, reasks: set[int], result: InterviewResult
 ) -> None:
@@ -398,18 +351,26 @@ def _check_one_question_at_a_time(
     question on one line ending in the single "?" the reply is allowed, with the options numbered
     beneath it and the why-clause after them.
 
+    Counts DISTINCT questions, not question turns. After the user goes back and corrects an answer
+    the interview resumes at the question that was on screen when they left, so that question is
+    asked a second time - correctly, since it was never answered. Counting turns would read an
+    honest correction as an interview that overran the pack, which is the opposite of the point.
+
     :param turns: The recorded turns.
     :param brief_index: Index of the brief, or -1.
     :param reasks: Indices of designer turns that re-open an earlier question.
     :param result: Accumulates findings and the question count.
     """
     limit: int = brief_index if brief_index >= 0 else len(turns)
+    seen: set[str] = set()
     for index, turn in _designer_turns(turns):
         if index >= limit:
             continue
         questions: int = turn.text.count("?")
-        if index not in reasks:
-            result.questions_asked += min(questions, 1)
+        key: str = _question_key(turn.text)
+        if index not in reasks and questions and key not in seen:
+            result.questions_asked += 1
+        seen.add(key)
         if questions > 1:
             result.findings.append(
                 Finding(
@@ -438,7 +399,7 @@ def _check_questions_offer_options(turns: list[Turn], brief_index: int, result: 
     for index, turn in _designer_turns(turns):
         if index >= limit or "?" not in turn.text or _is_refusal_reply(turns, index):
             continue
-        options: list[str] = _offered_options(turn.text)
+        options: list[str] = offered_options(turn.text)
         if len(options) < MIN_OPTIONS:
             result.findings.append(
                 Finding(
@@ -487,17 +448,17 @@ def _check_ambiguity_is_resolved(turns: list[Turn], brief_index: int, result: In
     for index, turn in enumerate(turns):
         if turn.role != ROLE_USER or index == 0 or index >= limit or turns[index - 1].role != ROLE_DESIGNER:
             continue
-        options: list[str] = _offered_options(turns[index - 1].text)
+        options: list[str] = offered_options(turns[index - 1].text)
         if not options or _picked_a_number(turn.text, len(options)):
             continue
-        tied: list[str] = _ambiguous_candidates(turn.text, options)
+        tied: list[str] = tied_options(turn.text, options)
         if not tied:
             continue
 
         reply: Turn | None = turns[index + 1] if index + 1 < len(turns) else None
-        offered_again: list[str] = _offered_options(reply.text) if reply is not None else []
-        re_offered: set[str] = {_key(option) for option in offered_again}
-        if reply is None or reply.role != ROLE_DESIGNER or len({_key(one) for one in tied} & re_offered) < 2:
+        offered_again: list[str] = offered_options(reply.text) if reply is not None else []
+        re_offered: set[str] = {option_key(option) for option in offered_again}
+        if reply is None or reply.role != ROLE_DESIGNER or len({option_key(one) for one in tied} & re_offered) < 2:
             result.findings.append(
                 Finding(
                     kind="AMBIGUITY",
@@ -549,7 +510,7 @@ def _check_revisions_are_honoured(turns: list[Turn], result: InterviewResult) ->
                 )
             )
             continue
-        if "?" not in reply.text or len(_offered_options(reply.text)) < MIN_OPTIONS:
+        if "?" not in reply.text or len(offered_options(reply.text)) < MIN_OPTIONS:
             result.findings.append(
                 Finding(
                     kind="REVISION",

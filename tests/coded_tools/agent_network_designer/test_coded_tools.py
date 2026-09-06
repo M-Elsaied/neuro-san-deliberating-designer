@@ -31,6 +31,8 @@ from typing import Any
 import pytest
 
 from coded_tools.agent_network_designer.extract_docs import ExtractDocs
+from coded_tools.agent_network_designer.interview_log import InterviewLog
+from coded_tools.agent_network_designer.interview_state import INTERVIEW_LOG
 from coded_tools.agent_network_designer.knowledge_pack import PACK_PROVENANCE
 from coded_tools.agent_network_designer.knowledge_pack import KnowledgePack
 from coded_tools.agent_network_designer.list_domains import ListDomains
@@ -282,3 +284,160 @@ def test_the_async_entry_points_match_the_sync_ones(built):
     assert asyncio.run(VerifyStandards().async_invoke({"app_name": DOMAIN}, built)) == VerifyStandards().invoke(
         {"app_name": DOMAIN}, built
     )
+
+
+# --------------------------------------------------------------------------------------
+# InterviewLog: the state the front man no longer has to remember
+# --------------------------------------------------------------------------------------
+
+
+def drive(*calls: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """
+    Run a sequence of InterviewLog calls against one session's sly_data.
+
+    :param calls: The argument dictionaries, in order.
+    :return: The last result, and the sly_data it left behind.
+    """
+    tool, sly_data = InterviewLog(), {}
+    result: Any = None
+    for call in calls:
+        result = tool.invoke(call, sly_data)
+        assert not isinstance(result, str), result
+    return result, sly_data
+
+
+def test_interview_log_starts_an_interview_and_stores_it():
+    """
+    The first call has to leave state behind, or nothing after it can work.
+    """
+    result, sly_data = drive({"action": "start", "app_name": "oracle_database_patching"})
+
+    assert result["label"] == "Q1"
+    assert result["outstanding"] == 7
+    assert "1." in result["prompt"], "the first question came back with no numbered options"
+    assert INTERVIEW_LOG in sly_data, "the interview was not written to sly_data"
+
+
+def test_interview_log_carries_answers_across_calls():
+    """
+    Each call reads the state the last one wrote. This is the whole mechanism.
+    """
+    result, _ = drive(
+        {"action": "start", "app_name": "oracle_database_patching"},
+        {"action": "answer", "reply": "2"},
+        {"action": "answer", "reply": "1"},
+    )
+
+    assert result["outstanding"] == 5
+    assert result["label"] == "Q2"
+    assert len(result["log"]) == 3
+
+
+def test_interview_log_reports_an_ambiguous_reply_without_recording_it():
+    """
+    The live failure, through the interface the designer actually calls.
+    """
+    result, _ = drive(
+        {"action": "start", "app_name": "oracle_database_patching"},
+        *[{"action": "answer", "reply": "1"} for _ in range(4)],
+        {"action": "answer", "reply": "service now CR"},
+    )
+
+    assert result["status"] == "ambiguous"
+    assert len(result["candidates"]) == 2
+    assert result["outstanding"] == 3, "an ambiguous reply was recorded as an answer"
+
+
+def test_interview_log_takes_the_user_back_and_keeps_the_rest():
+    """
+    Going back through the tool, with the answers either side left alone.
+    """
+    result, _ = drive(
+        {"action": "start", "app_name": "oracle_database_patching"},
+        *[{"action": "answer", "reply": "1"} for _ in range(5)],
+        {"action": "back", "target": "Q2"},
+    )
+
+    assert result["status"] == "reopened"
+    assert result["label"] == "Q2"
+    assert result["outstanding"] == 2, "going back discarded answers it should have kept"
+    assert "(currently on file)" in result["prompt"]
+
+
+def test_interview_log_flags_a_default_as_assumed():
+    """
+    The flag the brief's separation of confirmed from assumed depends on.
+    """
+    result, _ = drive(
+        {"action": "start", "app_name": "oracle_database_patching"},
+        {"action": "assume", "default": "single instance, no standby"},
+    )
+
+    assert "(assumed)" in result["log"][0]
+
+
+def test_interview_log_refuses_to_restart_when_the_state_was_not_carried():
+    """
+    The failure that would be worst if it were quiet: an interview silently beginning again, with
+    the user answering the same questions and no explanation of why.
+
+    The error also names the sly_data declaration, because a missing to_upstream entry is the one
+    way this happens in a real deployment and the symptom looks nothing like the cause.
+    """
+    outcome: Any = InterviewLog().invoke({"action": "answer", "reply": "2"}, {})
+
+    assert isinstance(outcome, str) and outcome.startswith("Error:")
+    assert "allow.to_upstream.sly_data" in outcome
+    assert INTERVIEW_LOG in outcome
+
+
+@pytest.mark.parametrize(
+    ("call", "fragment"),
+    [
+        ({"action": "sideways"}, "Unknown action"),
+        ({"action": "start"}, "No domain given"),
+        ({"action": "start", "app_name": "no_such_domain"}, "Could not load"),
+    ],
+)
+def test_interview_log_reports_usage_errors_as_errors(call, fragment):
+    """
+    A tool the model drives by name needs its misuse to come back readable.
+    """
+    outcome: Any = InterviewLog().invoke(call, {})
+
+    assert isinstance(outcome, str)
+    assert fragment in outcome
+
+
+@pytest.mark.parametrize("action", ["answer", "assume"])
+def test_interview_log_needs_something_to_record(action):
+    """
+    An empty reply is not an answer, and must not be stored as one.
+    """
+    _, sly_data = drive({"action": "start", "app_name": "oracle_database_patching"})
+    outcome: Any = InterviewLog().invoke({"action": action, action_key(action): "   "}, sly_data)
+
+    assert isinstance(outcome, str) and outcome.startswith("Error:")
+
+
+def action_key(action: str) -> str:
+    """
+    :param action: The action being called.
+    :return: The argument that action reads its text from.
+    """
+    return "reply" if action == "answer" else "default"
+
+
+def test_interview_log_async_invoke_matches_invoke():
+    """
+    The async path is an adapter, not a second implementation.
+    """
+    tool, sly_data = InterviewLog(), {}
+    started: Any = asyncio.run(
+        tool.async_invoke({"action": "start", "app_name": "oracle_database_patching"}, sly_data)
+    )
+    answered: Any = asyncio.run(tool.async_invoke({"action": "answer", "reply": "2"}, sly_data))
+
+    assert started["label"] == "Q1"
+    assert answered["status"] == "recorded"
+    assert answered["log"][0].startswith("Q1.")

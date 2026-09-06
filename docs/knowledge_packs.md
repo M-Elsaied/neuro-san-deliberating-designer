@@ -112,11 +112,17 @@ The **why** matters more than it looks. It is what lets the designer justify a q
 itself understand — it has no idea what Data Guard is, and does not need to. A pack that omits the
 why-clause is reported by validation.
 
-The **examples** carry a second job: they are rendered to the user as a numbered list, one option per
-line, followed by *something else* and *not sure*. So write them as answers a requester could pick, not
-as a hint about the shape of an answer — and keep them genuinely distinct. Two examples that differ only
-in a detail the user is likely to leave out (*the same change record approved by two different bodies*)
-are exactly the case the designer must stop and ask about, so the distinction has to be in the wording.
+The **examples** carry a second job: `InterviewLog` renders them to the user as a numbered list, one
+option per line, verbatim and in your order, followed by *something else* and *not sure*. So write them
+as answers a requester could pick, not as a hint about the shape of an answer — and keep them genuinely
+distinct. Two examples that differ only in a detail the user is likely to leave out (*the same change
+record approved by two different bodies*) are the case the designer must stop and ask about: an answer
+that is a shortening of both is reported as ambiguous and sent back, so the distinction has to be in the
+wording rather than implied.
+
+Because the rendering is computed from this file, the options a user sees cannot drift from what you
+wrote here. The question **order** is the order of these bullets, and it is also the order the user
+navigates by when they go back — the first bullet is `Q1` for the whole session.
 
 ## `pack.hocon`
 

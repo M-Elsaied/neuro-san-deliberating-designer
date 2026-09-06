@@ -69,7 +69,10 @@ TRANSCRIPTS: Path = Path(__file__).resolve().parents[1] / "fixtures" / "transcri
 #     This is the live failure the numbered options exist for: the designer must ask again.
 #   * a request to go back and correct an earlier answer, after later answers are already on file.
 #     Honouring it means re-asking that one question and keeping the rest - not re-running the
-#     interview, and not refusing as though the user were asking to skip something.
+#     interview, and not refusing as though the user were asking to skip something. Named by its
+#     entry label rather than by topic, because what this run is testing is whether the designer
+#     hands the request to InterviewLog and prints what comes back; which phrasings the resolver
+#     understands is settled offline in test_interview_state, without spending a model call.
 #
 # Only the Oracle script carries the last two. One domain proving a method-layer behaviour is the
 # proof; repeating it per domain would buy nothing but run time.
@@ -83,7 +86,7 @@ SCRIPTS: dict[str, tuple[str, ...]] = {
         "DBA team takes the RMAN backup, verified restore point required.",
         "ServiceNow CR",
         "approved by CAB",
-        "go back - I want to change the window answer",
+        "go back to Q3 - I got the window wrong",
         "8 hours, full outage acceptable",
         "opatch rollback, and the DBA team signs off connectivity.",
         "assume sensible defaults for anything still open",
