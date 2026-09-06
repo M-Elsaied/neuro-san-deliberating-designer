@@ -112,6 +112,12 @@ The **why** matters more than it looks. It is what lets the designer justify a q
 itself understand — it has no idea what Data Guard is, and does not need to. A pack that omits the
 why-clause is reported by validation.
 
+The **examples** carry a second job: they are rendered to the user as a numbered list, one option per
+line, followed by *something else* and *not sure*. So write them as answers a requester could pick, not
+as a hint about the shape of an answer — and keep them genuinely distinct. Two examples that differ only
+in a detail the user is likely to leave out (*the same change record approved by two different bodies*)
+are exactly the case the designer must stop and ask about, so the distinction has to be in the wording.
+
 ## `pack.hocon`
 
 ```hocon

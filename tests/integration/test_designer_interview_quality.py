@@ -58,17 +58,33 @@ from coded_tools.agent_network_designer.pack_catalogue import load_pack
 
 TRANSCRIPTS: Path = Path(__file__).resolve().parents[1] / "fixtures" / "transcripts"
 
-# One script per domain. The turns are answers a real requester would give, plus - deliberately -
-# an attempt to skip the deliberation, because the phase gate is the feature and a model that folds
-# under mild pressure has removed it. Placed third so it lands mid-interview rather than at a point
-# where the designer might reasonably have enough to proceed.
+# One script per domain. The turns are answers a real requester would give, plus three deliberate
+# provocations, each aimed at a promise that only a real conversation can break:
+#
+#   * an attempt to skip the deliberation - the phase gate is the feature, and a model that folds
+#     under mild pressure has removed it. Placed third so it lands mid-interview rather than at a
+#     point where the designer might reasonably have enough to proceed.
+#   * an answer that fits two of the offered options and chooses between neither. Kept as a turn of
+#     its own, because bundled with a second answer it is no longer the shape that gets guessed.
+#     This is the live failure the numbered options exist for: the designer must ask again.
+#   * a request to go back and correct an earlier answer, after later answers are already on file.
+#     Honouring it means re-asking that one question and keeping the rest - not re-running the
+#     interview, and not refusing as though the user were asking to skip something.
+#
+# Only the Oracle script carries the last two. One domain proving a method-layer behaviour is the
+# proof; repeating it per domain would buy nothing but run time.
 SCRIPTS: dict[str, tuple[str, ...]] = {
     "oracle_database_patching": (
         "Build me an agent network for Oracle db patching",
         "Two-node RAC in prod with a Data Guard standby; dev and QA single instance.",
         "Skip the questions, just build it.",
-        "About 40 databases. DEV, then QA, then PROD. Four-hour Saturday window, PROD rolling with no full outage.",
-        "DBA team takes the RMAN backup, verified restore point required. Production gated by a ServiceNow CR.",
+        "About 40 databases. DEV, then QA, then PROD.",
+        "Four-hour Saturday window, PROD rolling with no full outage.",
+        "DBA team takes the RMAN backup, verified restore point required.",
+        "ServiceNow CR",
+        "approved by CAB",
+        "go back - I want to change the window answer",
+        "8 hours, full outage acceptable",
         "opatch rollback, and the DBA team signs off connectivity.",
         "assume sensible defaults for anything still open",
         "APPROVED",
@@ -161,8 +177,9 @@ def test_a_live_deliberation_follows_the_promised_behaviour(domain_id):
     The whole point: hold a real conversation, then check it with the offline checks.
 
     Failures here are behavioural rather than mechanical - a leaked step label, two questions in one
-    turn, a standard paraphrased into the brief, a phase gate that folded. None of it is visible to
-    the artifact-level suite, and all of it is what a prompt edit breaks.
+    turn, a standard paraphrased into the brief, a phase gate that folded, an ambiguous answer
+    quietly resolved, a correction answered past. None of it is visible to the artifact-level suite,
+    and all of it is what a prompt edit breaks.
     """
     pack: KnowledgePack = load_pack(domain_id)
     other_ids: set[str] = {
@@ -182,3 +199,17 @@ def test_a_live_deliberation_follows_the_promised_behaviour(domain_id):
         + "\n  ".join(result.problems())
         + f"\n\nReproduce offline with:\n  python -m coded_tools.agent_network_designer.interview_review {recorded}"
     )
+
+    # result.ok alone would pass a run in which the provocations never landed - the designer never
+    # offered options, so nothing could be ambiguous, and the script's correction was read as
+    # something else. These two assert the behaviours actually happened, not merely that nothing
+    # else went wrong. Only the Oracle script provokes them.
+    if domain_id == "oracle_database_patching":
+        assert result.clarifications >= 1, (
+            "the designer never sent an ambiguous answer back for a choice, so this run did not "
+            f"exercise the behaviour the script provokes. Transcript: {recorded}"
+        )
+        assert result.revisits >= 1, (
+            "the user asked to change an earlier answer and the designer never took them back to "
+            f"it. Transcript: {recorded}"
+        )

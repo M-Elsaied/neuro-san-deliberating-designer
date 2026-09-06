@@ -8,7 +8,7 @@
     },
     {
       "role": "designer",
-      "text": "Matched the curated domain Oracle database patching.\n\nFirst, what is the topology of the estate - single instance, RAC, Data Guard standby, or Exadata? It decides whether we can patch rolling or need a full outage."
+      "text": "Matched the curated domain Oracle database patching.\n\nFirst, what is the topology of the estate?\n  1. single instance, no standby\n  2. two-node RAC\n  3. RAC + physical standby\n  4. Exadata X8M\n  5. Something else - I will describe it\n  6. I am not sure - choose a sensible default for me\n\nIt decides whether we can patch rolling or need a full outage, and whether a standby is patched too.\nReply with a number, or in your own words. Say \"go back\" to change an earlier answer."
     },
     {
       "role": "user",

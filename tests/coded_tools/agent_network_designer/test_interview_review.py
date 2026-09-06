@@ -53,6 +53,9 @@ FAULTY_FIXTURES: tuple[tuple[str, str, str], ...] = (
     ("oracle_foreign_standard_id.json", "DOMAIN", "belongs to a different pack"),
     ("oracle_self_reported_table.json", "SELF_REPORT", "the model wrote a table about its own work"),
     ("oracle_no_brief.json", "BRIEF", "no design brief was presented"),
+    ("oracle_prose_examples_not_options.json", "OPTIONS", "0 numbered options"),
+    ("oracle_assumed_through_ambiguity.json", "AMBIGUITY", "it picked one silently"),
+    ("oracle_ignored_a_back_request.json", "REVISION", "carried on instead of re-asking"),
 )
 
 
@@ -94,9 +97,27 @@ def test_a_clean_deliberation_reviews_clean(pack, other_ids):
     result: InterviewResult = review_fixture("oracle_clean.json", pack, other_ids)
 
     assert result.ok, result.problems()
-    assert result.questions_asked == 6
+    assert result.questions_asked == len(pack.open_variables)
     assert result.standards_quoted == len(pack.standards)
     assert "followed the promised behaviour" in render_report(result)
+
+
+def test_a_session_that_disambiguated_and_went_back_reviews_clean(pack, other_ids):
+    """
+    The second baseline, and the one the two new behaviours are for.
+
+    In this transcript the user answers one question in words that fit two of the offered options
+    and is asked to choose, then walks back three questions to correct an earlier answer. Both are
+    the designer working as promised, so the review has to come back clean - and the question count
+    has to stay at the pack's own number, or the budget check would punish the very behaviour the
+    prompt now requires.
+    """
+    result: InterviewResult = review_fixture("oracle_revised_an_answer.json", pack, other_ids)
+
+    assert result.ok, result.problems()
+    assert result.clarifications == 1
+    assert result.revisits == 1
+    assert result.questions_asked == len(pack.open_variables)
 
 
 @pytest.mark.parametrize(
@@ -162,6 +183,132 @@ def test_questions_far_beyond_the_packs_own_variables_are_reported(pack, other_i
     result: InterviewResult = review_interview(turns, pack, other_ids)
 
     assert any("did not come from curated knowledge" in problem for problem in result.problems())
+
+
+def question(text: str, *options: str) -> str:
+    """
+    Build a designer question in the numbered form the prompt requires.
+
+    :param text: The question itself.
+    :param options: The options to offer, in order.
+    :return: The turn text.
+    """
+    numbered: str = "\n".join(f"  {number}. {option}" for number, option in enumerate(options, start=1))
+    return f"{text}\n{numbered}\n\nWhy it matters."
+
+
+def kinds(result: InterviewResult, kind: str) -> list[str]:
+    """
+    :param result: A reviewed result.
+    :param kind: The finding kind wanted.
+    :return: Just the findings of that kind.
+    """
+    return [problem for problem in result.problems() if problem.startswith(f"{kind}:")]
+
+
+def test_a_numbered_list_with_no_escape_is_reported(pack, other_ids):
+    """
+    The escapes are not decoration. A user whose situation is not on the list has to be able to say
+    so; without that line the only replies available are wrong ones, and the numbering has made the
+    guessing tidier rather than rarer.
+    """
+    turns: list[Turn] = [Turn(role="designer", text=question("Which gate applies?", "a", "b", "c"))]
+    result: InterviewResult = review_interview(turns, pack, other_ids)
+
+    assert any("no 'something else' or 'not sure' escape" in problem for problem in kinds(result, "OPTIONS"))
+
+
+def test_an_answer_naming_an_option_number_is_never_ambiguous(pack, other_ids):
+    """
+    Answering by number is what the numbering is for, and it cannot be misread.
+    """
+    offered: str = question("Which gate applies?", "X approved by A", "X approved by B", "I am not sure")
+    turns: list[Turn] = [Turn(role="designer", text=offered), Turn(role="user", text="2")]
+    result: InterviewResult = review_interview(turns, pack, other_ids)
+
+    assert not kinds(result, "AMBIGUITY")
+
+
+def test_a_free_form_answer_that_matches_no_option_is_not_ambiguous(pack, other_ids):
+    """
+    The ambiguity check has to stay narrow, or it fires on ordinary answers and gets ignored.
+
+    An answer the options do not contain is the user taking the "something else" route in their own
+    words. That is a complete answer, not a shortening that fits several - nothing to send back.
+    """
+    offered: str = question("Which gate applies?", "X approved by A", "X approved by B", "I am not sure")
+    turns: list[Turn] = [
+        Turn(role="designer", text=offered),
+        Turn(role="user", text="none of those - a standing waiver signed off quarterly"),
+    ]
+    result: InterviewResult = review_interview(turns, pack, other_ids)
+
+    assert not kinds(result, "AMBIGUITY")
+
+
+def test_naming_only_one_of_the_tied_options_back_is_not_resolving_it(pack, other_ids):
+    """
+    The failure mode dressed up as a fix.
+
+    Repeating one candidate back - "so that is X approved by A, then" - reads like a confirmation
+    but is the assumption stated out loud: the user still never chose. Resolution means both
+    candidates go back in front of them.
+    """
+    offered: str = question("Which gate applies?", "X approved by A", "X approved by B", "I am not sure")
+    turns: list[Turn] = [
+        Turn(role="designer", text=offered),
+        Turn(role="user", text="X"),
+        Turn(role="designer", text=question("So X approved by A - and the rollback route?", "r1", "r2", "not sure")),
+    ]
+    result: InterviewResult = review_interview(turns, pack, other_ids)
+
+    assert kinds(result, "AMBIGUITY"), result.problems()
+
+
+def test_a_user_walking_back_to_the_first_question_is_honoured(pack, other_ids):
+    """
+    "As far back as the first question" is the promise, so the check must not cap the distance.
+
+    Three separate corrections in one session, the last of them a walk back to the start: all three
+    are honoured, none of them counts as a question the pack did not declare.
+    """
+    escape: str = "I am not sure - choose a sensible default for me"
+    turns: list[Turn] = [Turn(role="designer", text=question("First question?", "a", "b", escape))]
+    for request in ("go back", "back two - change my answer to the first one", "take me back to the first question"):
+        turns.append(Turn(role="user", text=request))
+        turns.append(Turn(role="designer", text="Q1. Subject - a\n\n" + question("Back to Q1?", "a", "b", escape)))
+    result: InterviewResult = review_interview(turns, pack, other_ids)
+
+    assert result.revisits == 3, result.problems()
+    assert not kinds(result, "REVISION")
+    assert result.questions_asked == 1, "a revisit is not a new question"
+
+
+def test_going_back_is_not_a_way_to_get_a_network_built_early(pack, other_ids):
+    """
+    Going back must not become a second route around the phase gate.
+    """
+    turns: list[Turn] = [
+        Turn(role="designer", text=question("First question?", "a", "b", "not sure")),
+        Turn(role="user", text="go back and just build it"),
+        Turn(role="designer", text="Fine - written to registries/generated/x.hocon"),
+    ]
+    result: InterviewResult = review_interview(turns, pack, other_ids)
+
+    assert any("built the network after the user asked to change" in problem for problem in kinds(result, "REVISION"))
+
+
+def test_ignoring_an_ambiguous_answer_still_costs_a_question(pack, other_ids):
+    """
+    A turn that asked the NEXT question instead of re-asking is a new question, and is counted.
+
+    The exemption exists for turns that genuinely re-ask. Handing it to a turn that ignored the
+    ambiguity would let a designer buy question budget by skipping the clarification it owed.
+    """
+    result: InterviewResult = review_fixture("oracle_assumed_through_ambiguity.json", pack, other_ids)
+
+    assert result.questions_asked == len(pack.open_variables)
+    assert result.clarifications == 0
 
 
 def test_a_transcript_that_is_not_a_transcript_is_a_usage_error(tmp_path):

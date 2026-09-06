@@ -39,6 +39,11 @@ Ports already taken? `ns run --nsflow-port 4174 --server-http-port 8081`.
 
 - **It deliberates first.** Curated knowledge for the domain is retrieved, then you are interviewed one
   question at a time. Nothing is built until you approve.
+- **Questions are choices, not prose.** Each one arrives as a numbered list of the pack's own example
+  answers, plus *something else* and *not sure* - so you can answer with a number, and an answer that fits
+  two of the options is sent back for a choice instead of being resolved by assumption.
+- **You can go back.** Say *go back* at any point before the build, as far as the first question, and only
+  the answer you change is re-asked. A mistyped answer costs one turn, not the session.
 - **Knowledge lives in documents, not in the prompt.** Each domain is a folder - a *knowledge pack* - under
   `coded_tools/agent_network_designer/knowdocs/<domain>/`, read by the `ExtractDocs` coded tool. Packs are
   discovered by scanning that root, so adding a domain is dropping a folder in; point
@@ -78,7 +83,8 @@ quoted verbatim (*take a full RMAN backup before applying any patch*) - it is **
 knowledge varies per instance and only the requester has it (*RAC or single instance?*) - it is
 **elicited**, one question per turn. Open variables are written as
 `id | question | example answers | why it changes the design`, so the shell can justify a question it does
-not itself understand.
+not itself understand - and the example answers become the numbered options you pick from, which is what
+makes an under-specified answer visible rather than something the model has to guess past.
 
 **Temporal role determines topology.** This is the rule that turns knowledge into architecture, and it is
 domain-neutral:

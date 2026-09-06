@@ -45,6 +45,20 @@ The sharpest check is the verbatim one. The brief is instructed to quote each op
 "verbatim from the curated document", and until now nobody compared them. It reuses normalise()
 from knowledge_pack, so the tolerance is identical to the artifact's fidelity check: re-wrapping
 and typography pass, a changed word does not.
+
+Three of the checks are about the shape of a question rather than the shape of the brief, and they
+come from watching a real session go wrong. The designer offered two options inside one sentence -
+the same system approved by two different bodies - the user typed the part they had in common, and
+the designer recorded it and moved on. Nothing above notices that: the brief reads cleanly, the
+network embeds every standard, and the approval gate was chosen by the model with the user never
+told a choice had been made. So:
+
+  * OPTIONS - a question is a numbered list with an escape, which is what lets a user be exact;
+  * AMBIGUITY - an answer that fits several of the offered options must be sent back, not resolved;
+  * REVISION - a user asking to change an earlier answer is taken back to it, not answered past.
+
+An ambiguity resolved and an answer revised are both counted, and both kept out of the question
+count, so the budget check cannot punish a designer for disambiguating or a user for correcting.
 """
 
 import argparse
@@ -108,6 +122,41 @@ COMPUTED_TABLE_MARKERS: tuple[str, ...] = ("Role", "Fidelity")
 # clarification and a confirmation without allowing an invented interview.
 QUESTION_ALLOWANCE: int = 2
 
+# One offered option: "  1. ServiceNow CR approved by CAB". The number must open the line, because
+# an enumerated choice the user can answer by number is the whole point - a digit buried in a
+# sentence is prose again.
+OPTION_RE: re.Pattern = re.compile(r"^[ \t]*\d{1,2}[.)][ \t]+(?P<text>\S[^\n]*)$", re.MULTILINE)
+
+# How the user names an option instead of retyping it: "2", "option 2", "#2", "2 and 3".
+OPTION_PICK_RE: re.Pattern = re.compile(r"(?:^|\b)(?:option[ \t]*|#)?(\d{1,2})\b")
+
+# The escapes that stop a numbered list from narrowing the answer to whatever the designer listed.
+# Without one of these on offer, a user whose situation is not in the list has no honest reply, and
+# picking the closest wrong option is exactly the silent guess the numbering exists to prevent.
+ESCAPE_MARKERS: tuple[str, ...] = ("not sure", "something else", "you decide", "sensible default", "don't know")
+
+# The fewest options that make a choice: two real answers plus at least one escape.
+MIN_OPTIONS: int = 3
+
+# How the user asks to correct an earlier answer. Kept broad on purpose: a user fixing a mistake
+# phrases it however it occurs to them, and the one reply that must never happen is the designer
+# treating the request as an answer to the question on screen.
+BACK_REQUESTS: tuple[str, ...] = (
+    "go back",
+    "going back",
+    "take me back",
+    "back to question",
+    "previous question",
+    "earlier question",
+    "change my answer",
+    "change what i said",
+    "change question",
+    "revise my answer",
+    "answered that wrong",
+    "got that wrong",
+    "start again from",
+)
+
 
 @dataclass(frozen=True)
 class Turn:
@@ -142,6 +191,12 @@ class InterviewResult:
     questions_asked: int = 0
     open_variables: int = 0
     standards_quoted: int = 0
+    # Counted apart from questions_asked, because neither adds a variable the pack did not declare:
+    # a clarification finishes one already asked, a revisit re-opens one already answered. Folding
+    # them into the count would make honest disambiguation and honest correction look like an
+    # invented interview and trip the question budget.
+    clarifications: int = 0
+    revisits: int = 0
 
     @property
     def ok(self) -> bool:
@@ -195,8 +250,15 @@ def review_interview(turns: list[Turn], pack: KnowledgePack, other_ids: set[str]
 
     brief_index: int = _find_brief(turns)
     approval_index: int = _find_approval(turns)
+    # These two run before the question count, because they are what decides which designer turns
+    # re-open a question rather than asking a new one - and only a turn that ACTUALLY re-asks is
+    # excused from the count. A turn that ignored an ambiguous answer asked a new question, and is
+    # counted as one on top of the AMBIGUITY finding it already earned.
+    reasks: set[int] = _check_ambiguity_is_resolved(turns, brief_index, result)
+    reasks |= _check_revisions_are_honoured(turns, result)
 
-    _check_one_question_at_a_time(turns, brief_index, result)
+    _check_one_question_at_a_time(turns, brief_index, reasks, result)
+    _check_questions_offer_options(turns, brief_index, result)
     _check_no_step_labels(turns, result)
     _check_no_foreign_ids(turns, other_ids or set(), result)
     _check_refusals(turns, result)
@@ -237,15 +299,108 @@ def _find_approval(turns: list[Turn]) -> int:
     return -1
 
 
-def _check_one_question_at_a_time(turns: list[Turn], brief_index: int, result: InterviewResult) -> None:
+def _offered_options(text: str) -> list[str]:
+    """
+    :param text: A designer turn.
+    :return: The text of each numbered option the turn offered, in order.
+    """
+    return [match.group("text").strip() for match in OPTION_RE.finditer(text)]
+
+
+def _key(text: str) -> str:
+    """
+    Reduce an answer or an option to comparable characters only.
+
+    Letters and digits, lowercased, everything else dropped - so "service now CR" and
+    "ServiceNow CR" are the same key. That matters here specifically: the shortenings a user
+    actually types differ from the curated wording in spacing and punctuation far more often than
+    in words, and a check that missed them would miss the case it exists for.
+
+    :param text: Any fragment.
+    :return: The comparison key.
+    """
+    return re.sub(r"[^a-z0-9]+", "", text.lower())
+
+
+def _picked_a_number(reply: str, option_count: int) -> bool:
+    """
+    :param reply: What the user said.
+    :param option_count: How many options were on offer.
+    :return: True if the reply names at least one of the offered option numbers.
+    """
+    return any(1 <= int(match.group(1)) <= option_count for match in OPTION_PICK_RE.finditer(reply))
+
+
+def _ambiguous_candidates(reply: str, options: list[str]) -> list[str]:
+    """
+    Find the options a reply is consistent with but does not choose between.
+
+    The test is deliberately narrow: the reply's key must be a proper substring of the option's
+    key - the reply says LESS than the option, and everything it does say the option also says.
+    "service now cr" is a substring of both "servicenow cr approved by cab" and "servicenow cr
+    approved by the app owner", so it settles nothing; "dba team takes the rman backup" is a
+    substring of nothing on offer, so it is a free-form answer and not this function's business.
+
+    Narrow on purpose. A broader notion of ambiguity would need judgement, and a check that fires
+    on ordinary answers teaches a reader to ignore it. This fires on one shape - a shortening that
+    fits several offered options - which is the shape that gets silently guessed.
+
+    :param reply: What the user said.
+    :param options: The options the previous designer turn offered.
+    :return: The tied options, or an empty list when the reply settles the question.
+    """
+    reply_key: str = _key(reply)
+    if not reply_key:
+        return []
+    tied: list[str] = []
+    for option in options:
+        option_key: str = _key(option)
+        if any(marker in option.lower() for marker in ESCAPE_MARKERS):
+            continue
+        if reply_key != option_key and reply_key in option_key:
+            tied.append(option)
+    return tied if len(tied) > 1 else []
+
+
+def _is_back_request(text: str) -> bool:
+    """
+    :param text: A user turn.
+    :return: True if the user asked to change an earlier answer.
+    """
+    lowered: str = text.lower()
+    return any(request in lowered for request in BACK_REQUESTS)
+
+
+def _is_refusal_reply(turns: list[Turn], index: int) -> bool:
+    """
+    Whether a designer turn is answering a request to skip the deliberation.
+
+    Carved out of the options check: a refusal names the questions still open rather than asking
+    one, so requiring it to offer a numbered choice would be requiring the wrong shape.
+
+    :param turns: The recorded turns.
+    :param index: Index of the designer turn.
+    :return: True when the turn before it asked to skip the questions.
+    """
+    if index == 0 or turns[index - 1].role != ROLE_USER:
+        return False
+    lowered: str = turns[index - 1].text.lower()
+    return any(request in lowered for request in SKIP_REQUESTS)
+
+
+def _check_one_question_at_a_time(
+    turns: list[Turn], brief_index: int, reasks: set[int], result: InterviewResult
+) -> None:
     """
     One question per turn is the interview. Two at once is a form.
 
     Counted as question marks, which is crude but decisive: the prompt's own format puts the
-    examples and the why-clause inside one sentence ending in a single "?".
+    question on one line ending in the single "?" the reply is allowed, with the options numbered
+    beneath it and the why-clause after them.
 
     :param turns: The recorded turns.
     :param brief_index: Index of the brief, or -1.
+    :param reasks: Indices of designer turns that re-open an earlier question.
     :param result: Accumulates findings and the question count.
     """
     limit: int = brief_index if brief_index >= 0 else len(turns)
@@ -253,7 +408,8 @@ def _check_one_question_at_a_time(turns: list[Turn], brief_index: int, result: I
         if index >= limit:
             continue
         questions: int = turn.text.count("?")
-        result.questions_asked += min(questions, 1)
+        if index not in reasks:
+            result.questions_asked += min(questions, 1)
         if questions > 1:
             result.findings.append(
                 Finding(
@@ -262,6 +418,152 @@ def _check_one_question_at_a_time(turns: list[Turn], brief_index: int, result: I
                     turn_index=index,
                 )
             )
+
+
+def _check_questions_offer_options(turns: list[Turn], brief_index: int, result: InterviewResult) -> None:
+    """
+    Every question is a numbered choice with an escape, not prose with the examples buried in it.
+
+    This is the check the live failure argued for. Offered "a; b; c" inside a sentence, a user
+    replies with a phrase that fits two of them, and there is nothing in the reply - and nothing in
+    the transcript afterwards - that says which one was meant. The numbering is what gives the user
+    a way to be exact; the escape options are what stop the list narrowing the answer to whatever
+    the designer happened to enumerate.
+
+    :param turns: The recorded turns.
+    :param brief_index: Index of the brief, or -1.
+    :param result: Accumulates findings.
+    """
+    limit: int = brief_index if brief_index >= 0 else len(turns)
+    for index, turn in _designer_turns(turns):
+        if index >= limit or "?" not in turn.text or _is_refusal_reply(turns, index):
+            continue
+        options: list[str] = _offered_options(turn.text)
+        if len(options) < MIN_OPTIONS:
+            result.findings.append(
+                Finding(
+                    kind="OPTIONS",
+                    detail=(
+                        f"asked a question offering {len(options)} numbered options; a question the user can "
+                        f"answer exactly needs at least {MIN_OPTIONS}, the last of them an escape"
+                    ),
+                    turn_index=index,
+                )
+            )
+            continue
+        if not any(marker in option.lower() for option in options for marker in ESCAPE_MARKERS):
+            result.findings.append(
+                Finding(
+                    kind="OPTIONS",
+                    detail=(
+                        "offered numbered options with no 'something else' or 'not sure' escape, so a user "
+                        "whose answer is not listed has to pick a wrong one"
+                    ),
+                    turn_index=index,
+                )
+            )
+
+
+def _check_ambiguity_is_resolved(turns: list[Turn], brief_index: int, result: InterviewResult) -> set[int]:
+    """
+    An answer consistent with several offered options is not an answer. Moving on assumes one.
+
+    The failure this exists for, exactly: options "<system> approved by <one body>" and "<system>
+    approved by <another>" are offered, the user names only the system, and the designer records
+    that and asks the next question - so the approval gate in the built network was chosen by the
+    model and the user was never told. The variable is still open, and the transcript is the only
+    place that is visible.
+
+    Resolved means the next designer turn puts the tied options back in front of the user. Naming
+    just one of them is not resolution: that is the assumption, spelled out.
+
+    :param turns: The recorded turns.
+    :param brief_index: Index of the brief, or -1.
+    :param result: Accumulates findings.
+    :return: Indices of the designer turns that did send an ambiguous answer back for a choice.
+    """
+    resolved: set[int] = set()
+    limit: int = brief_index if brief_index >= 0 else len(turns)
+    for index, turn in enumerate(turns):
+        if turn.role != ROLE_USER or index == 0 or index >= limit or turns[index - 1].role != ROLE_DESIGNER:
+            continue
+        options: list[str] = _offered_options(turns[index - 1].text)
+        if not options or _picked_a_number(turn.text, len(options)):
+            continue
+        tied: list[str] = _ambiguous_candidates(turn.text, options)
+        if not tied:
+            continue
+
+        reply: Turn | None = turns[index + 1] if index + 1 < len(turns) else None
+        offered_again: list[str] = _offered_options(reply.text) if reply is not None else []
+        re_offered: set[str] = {_key(option) for option in offered_again}
+        if reply is None or reply.role != ROLE_DESIGNER or len({_key(one) for one in tied} & re_offered) < 2:
+            result.findings.append(
+                Finding(
+                    kind="AMBIGUITY",
+                    detail=(
+                        f"the answer {turn.text.strip()[:40]!r} fits {len(tied)} of the options offered and chose "
+                        f"between none of them, and the designer did not ask again - it picked one silently"
+                    ),
+                    turn_index=index,
+                )
+            )
+            continue
+        result.clarifications += 1
+        resolved.add(index + 1)
+    return resolved
+
+
+def _check_revisions_are_honoured(turns: list[Turn], result: InterviewResult) -> set[int]:
+    """
+    A user correcting an earlier answer must be taken back to it, not answered past.
+
+    An interview that only moves forward makes the first wrong answer unfixable except by starting
+    the session over, and a user who cannot correct one answer will either accept a network built
+    on it or abandon the tool. Two failures are worth separating: treating the request as an answer
+    to the question on screen, and treating it as a reason to build anyway.
+
+    Honoured means the next designer turn re-asks something - a question with options - rather than
+    presenting the brief or writing a network.
+
+    :param turns: The recorded turns.
+    :param result: Accumulates findings.
+    :return: Indices of the designer turns that did take the user back to an earlier question.
+    """
+    honoured: set[int] = set()
+    for index, turn in enumerate(turns):
+        if turn.role != ROLE_USER or not _is_back_request(turn.text):
+            continue
+        reply: Turn | None = turns[index + 1] if index + 1 < len(turns) else None
+        if reply is None or reply.role != ROLE_DESIGNER:
+            result.findings.append(
+                Finding(kind="REVISION", detail="the user asked to go back and was never answered", turn_index=index)
+            )
+            continue
+        if any(marker in reply.text for marker in BUILT_MARKERS):
+            result.findings.append(
+                Finding(
+                    kind="REVISION",
+                    detail="built the network after the user asked to change an earlier answer",
+                    turn_index=index + 1,
+                )
+            )
+            continue
+        if "?" not in reply.text or len(_offered_options(reply.text)) < MIN_OPTIONS:
+            result.findings.append(
+                Finding(
+                    kind="REVISION",
+                    detail=(
+                        "the user asked to go back and the designer carried on instead of re-asking the "
+                        "earlier question"
+                    ),
+                    turn_index=index + 1,
+                )
+            )
+            continue
+        result.revisits += 1
+        honoured.add(index + 1)
+    return honoured
 
 
 def _check_no_step_labels(turns: list[Turn], result: InterviewResult) -> None:
@@ -457,6 +759,11 @@ def _check_question_budget(result: InterviewResult) -> None:
     A bound rather than a mapping: matching each question to its variable needs judgement, but a
     count that overruns the curated set is decisive on its own.
 
+    Clarifications and revisits are already excluded from the count, so the bound stays put however
+    many times the user disambiguates an answer or walks back to correct one. That is the point: the
+    budget is there to catch an invented interview, and it would be a poor trade if it also made
+    going back to the first question look like one.
+
     :param result: Accumulates findings; reads the counts already gathered.
     """
     budget: int = result.open_variables + QUESTION_ALLOWANCE
@@ -483,6 +790,8 @@ def render_report(result: InterviewResult) -> str:
         f"## Interview review - {result.domain_id}",
         "",
         f"- questions asked: {result.questions_asked} (pack declares {result.open_variables} open variables)",
+        f"- ambiguous answers sent back for a choice: {result.clarifications}",
+        f"- answers the user went back and changed: {result.revisits}",
         f"- standards quoted in the brief: {result.standards_quoted}",
         "",
     ]

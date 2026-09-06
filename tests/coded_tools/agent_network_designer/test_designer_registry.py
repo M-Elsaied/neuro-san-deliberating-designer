@@ -279,6 +279,68 @@ def test_phase_b_prints_the_computed_table_and_writes_none_of_its_own(front_man)
     assert "Do NOT write the coverage table yourself" in phase_b
 
 
+def test_every_question_is_a_numbered_choice_with_an_escape(front_man):
+    """
+    The prompt's half of the fix a live session argued for.
+
+    The designer offered its example answers as prose inside one sentence, the user replied with the
+    words two of those examples shared, and it recorded that and moved on - so the built network's
+    approval gate was chosen by the model, and the user was never told a choice existed. The
+    numbering is what lets the user be exact; the escapes are what stop the list narrowing the
+    answer to whatever got enumerated. Both are load-bearing, so both are asserted.
+    """
+    phase_a: str = collapse(str(front_man.get("instructions") or "")).split("PHASE B")[0]
+
+    assert "Every question is a NUMBERED LIST OF OPTIONS" in phase_a
+    assert "Something else - I will describe it" in phase_a
+    assert "I am not sure - choose a sensible default for me" in phase_a
+    assert "Never invent an option the document does not offer" in phase_a
+
+
+def test_an_ambiguous_answer_may_not_be_settled_by_assuming(front_man):
+    """
+    The interview's whole claim is that it separates what you confirmed from what it assumed.
+
+    An answer consistent with several offered options, recorded as though it chose one, breaks that
+    claim in the worst available way: it lands under "Confirmed requirements" without the user ever
+    having confirmed it, which is the one place the brief promises never to guess.
+    """
+    phase_a: str = collapse(str(front_man.get("instructions") or "")).split("PHASE B")[0]
+
+    assert "NEVER settle an ambiguous answer by assuming" in phase_a
+    assert "consistent with MORE THAN ONE of the options" in phase_a
+    assert "do not move on to the next variable" in phase_a
+
+
+def test_the_user_can_walk_back_to_any_earlier_answer(front_man):
+    """
+    An interview that only moves forward makes the first wrong answer unfixable except by starting
+    the session over. The answer log is what makes going back systematic rather than a re-run: the
+    entry labels are stable, so "back three" means something definite, and the answers the change
+    does not touch survive it.
+    """
+    phase_a: str = collapse(str(front_man.get("instructions") or "")).split("PHASE B")[0]
+
+    assert "CHANGE AN EARLIER ANSWER at any time before the build" in phase_a
+    assert "ANSWER LOG" in phase_a
+    assert "There is no limit on how far back" in phase_a
+    assert "never restart the interview" in phase_a
+    assert "Going back to an earlier answer is NOT skipping and is never refused" in phase_a
+
+
+def test_the_answer_log_cannot_be_mistaken_for_the_options(front_man):
+    """
+    Two numbered lists in one reply, and the user answers the wrong one.
+
+    The log is navigated by label and the options are answered by number, so the prompt labels the
+    log Q1, Q2 - which also keeps the two apart for the transcript checks, where a bare number at
+    the start of a line is how an offered option is recognised.
+    """
+    phase_a: str = collapse(str(front_man.get("instructions") or "")).split("PHASE B")[0]
+
+    assert 'never as a bare "1.", "2."' in phase_a
+
+
 def test_the_designer_is_told_to_discover_the_catalogue_before_matching(front_man):
     """
     Discovery is worthless if the prompt still assumes it knows what exists.
