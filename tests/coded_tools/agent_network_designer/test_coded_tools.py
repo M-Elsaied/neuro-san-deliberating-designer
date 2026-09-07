@@ -37,6 +37,7 @@ from coded_tools.agent_network_designer.interview_state import INTERVIEW_LOG
 from coded_tools.agent_network_designer.knowledge_pack import PACK_PROVENANCE
 from coded_tools.agent_network_designer.knowledge_pack import KnowledgePack
 from coded_tools.agent_network_designer.list_domains import ListDomains
+from coded_tools.agent_network_designer.pack_catalogue import load_catalogue
 from coded_tools.agent_network_designer.pack_catalogue import load_pack
 from coded_tools.agent_network_designer.verify_standards import VerifyStandards
 from tests.coded_tools.agent_network_designer.network_fixtures import reference_network
@@ -498,3 +499,40 @@ def test_interview_log_needs_either_a_domain_or_questions():
     assert isinstance(outcome, str)
     assert "no questions to ask" in outcome
     assert "questions for one this deployment has no pack for" in outcome
+
+
+@pytest.mark.parametrize("domain_id", sorted(one.domain_id for one in load_catalogue()))
+def test_interview_log_drives_a_full_interview_in_every_domain(domain_id):
+    """
+    The tool's tests named one domain throughout, which is how a domain-shaped assumption hides.
+
+    Answers every question of every shipped pack through the tool, then walks back to the first
+    entry and re-answers it - so the parts that could plausibly be Oracle-shaped (the option
+    numbering, the escape offsets, the label sequence, resuming after a correction) are exercised
+    against packs that declare different numbers of options and questions.
+    """
+    pack: KnowledgePack = load_pack(domain_id)
+    tool, sly_data = InterviewLog(), {}
+    result: Any = tool.invoke({"action": "start", "app_name": domain_id}, sly_data)
+    assert not isinstance(result, str), result
+    assert result["curated"] is True
+    assert result["outstanding"] == len(pack.open_variables)
+
+    for _ in pack.open_variables:
+        result = tool.invoke({"action": "answer", "reply": "1"}, sly_data)
+        assert not isinstance(result, str), result
+    assert result["status"] == "complete"
+    assert result["outstanding"] == 0
+    assert len(result["confirmed"]) == len(pack.open_variables)
+
+    # Now correct the very first answer and confirm nothing else moved.
+    before: list[str] = list(result["confirmed"])
+    result = tool.invoke({"action": "back", "target": "take me back to the first question"}, sly_data)
+    assert result["status"] == "reopened", result
+    assert result["label"] == "Q1"
+
+    result = tool.invoke({"action": "answer", "reply": "2"}, sly_data)
+    assert not isinstance(result, str), result
+    after: list[str] = result["confirmed"]
+    assert after[0] != before[0], f"{domain_id}: the correction did not take"
+    assert after[1:] == before[1:], f"{domain_id}: correcting Q1 disturbed a later answer"

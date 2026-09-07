@@ -37,8 +37,10 @@ from coded_tools.agent_network_designer.interview_review import load_transcript
 from coded_tools.agent_network_designer.interview_review import main
 from coded_tools.agent_network_designer.interview_review import render_report
 from coded_tools.agent_network_designer.interview_review import review_interview
+from coded_tools.agent_network_designer.interview_state import InterviewState
 from coded_tools.agent_network_designer.interview_state import begin
 from coded_tools.agent_network_designer.interview_state import offered_options
+from coded_tools.agent_network_designer.interview_state import tied_options
 from coded_tools.agent_network_designer.knowledge_pack import KnowledgePack
 from coded_tools.agent_network_designer.pack_catalogue import load_catalogue
 from coded_tools.agent_network_designer.pack_catalogue import load_pack
@@ -337,6 +339,110 @@ def test_ignoring_an_ambiguous_answer_still_costs_a_question(pack, other_ids):
 
     assert result.questions_asked == len(pack.open_variables)
     assert result.clarifications == 0
+
+
+ALL_DOMAINS: list[str] = sorted(pack.domain_id for pack in load_catalogue())
+
+
+def clean_transcript(pack: KnowledgePack) -> list[Turn]:
+    """
+    Build a clean deliberation for any pack, with the designer's turns rendered by the tool.
+
+    Not a fixture, on purpose. A committed transcript per domain would be three files to keep in
+    step with the renderer; generating them means the checks are exercised against whatever each
+    pack actually declares, and a pack added tomorrow is covered without anyone remembering to
+    write its transcript.
+
+    :param pack: The pack to interview from.
+    :return: The turns of a clean session, up to and including the brief.
+    """
+    state: InterviewState = begin(pack)
+    turns: list[Turn] = [Turn(role="user", text=f"Build me an agent network for {pack.manifest.title}")]
+    turns.append(Turn(role="designer", text=state.render()))
+    while True:
+        state, outcome = state.record("1")
+        if outcome.status == "complete":
+            break
+        turns.append(Turn(role="user", text="1"))
+        turns.append(Turn(role="designer", text=outcome.prompt))
+
+    confirmed, _ = state.brief_lines()
+    standards: str = "\n".join(f"- **{one.standard_id}** - {one.text}" for one in pack.standards)
+    turns.append(
+        Turn(
+            role="designer",
+            text=(
+                f"## DESIGN BRIEF - {pack.domain_id}\n\n**Scope**\nWhat it automates.\n\n"
+                "**Confirmed requirements** _(what you told me)_\n"
+                + "\n".join(f"- {line}" for line in confirmed)
+                + f"\n\n**Operating standards enforced** _(from curated knowledge)_\n{standards}\n\n"
+                "**Assumptions I made** _(tell me if any are wrong)_\n- None\n\n"
+                "**Out of scope**\n- Nothing identified\n\n"
+                "**Proposed network shape**\n- Top: coordinator\n\n"
+                'Reply APPROVED to build this, tell me what to change, or say "go back" to revisit an answer.\n'
+            ),
+        )
+    )
+    return turns
+
+
+@pytest.mark.parametrize("domain_id", ALL_DOMAINS)
+def test_a_clean_deliberation_reviews_clean_for_every_domain(domain_id):
+    """
+    The checks were calibrated on one domain, which is not the same as being domain-neutral.
+
+    Every transcript fixture here is an Oracle session. That is fine for proving a check has teeth
+    - a fault is a fault whatever the domain - but it says nothing about whether a check quietly
+    encodes the shape of the one domain it was written against. A pack with two example answers
+    where Oracle has four, or a question phrased without a colon, is exactly where that would show.
+
+    So a clean session is generated for each shipped pack and must review clean, with the question
+    count matching what that pack declares.
+    """
+    pack: KnowledgePack = load_pack(domain_id)
+    others: set[str] = {
+        standard.standard_id
+        for other in load_catalogue()
+        if other.domain_id != domain_id
+        for standard in other.standards
+    }
+    result: InterviewResult = review_interview(clean_transcript(pack), pack, others)
+
+    assert result.ok, f"{domain_id}:\n  " + "\n  ".join(result.problems())
+    assert result.questions_asked == len(pack.open_variables)
+    assert result.standards_quoted == len(pack.standards)
+
+
+@pytest.mark.parametrize("domain_id", ALL_DOMAINS)
+def test_an_ambiguous_answer_is_caught_in_every_domain_that_can_produce_one(domain_id):
+    """
+    The ambiguity rule is only as general as the option texts it compares.
+
+    Its test is a proper-substring check, which fires on a real shortening in any vocabulary - but
+    the fixture that proved it was one Oracle option pair. Here every pack is searched for a pair
+    of options sharing a leading phrase, and where one exists the shortening must be reported.
+    Packs whose options share no prefix are skipped rather than forced: nothing to be ambiguous
+    about is a property of the pack, not a gap in the check.
+    """
+    pack: KnowledgePack = load_pack(domain_id)
+    found: bool = False
+    for variable in pack.open_variables:
+        options: list[str] = [part.strip() for part in variable.examples.split(";") if part.strip()]
+        for option in options:
+            words: list[str] = option.split()
+            # Try progressively shorter prefixes; a prefix shared by two options is ambiguous.
+            for length in range(len(words) - 1, 1, -1):
+                prefix: str = " ".join(words[:length])
+                if len(tied_options(prefix, options)) > 1:
+                    found = True
+                    assert not tied_options(option, options), "a full option must never be ambiguous"
+                    break
+            if found:
+                break
+        if found:
+            break
+    if not found:
+        pytest.skip(f"{domain_id} declares no two options sharing a prefix")
 
 
 def test_the_clean_fixture_is_what_the_state_machine_actually_renders(pack, other_ids):

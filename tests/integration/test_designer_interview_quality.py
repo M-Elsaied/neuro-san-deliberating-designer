@@ -75,8 +75,12 @@ TRANSCRIPTS: Path = Path(__file__).resolve().parents[1] / "fixtures" / "transcri
 #     hands the request to InterviewLog and prints what comes back; which phrasings the resolver
 #     understands is settled offline in test_interview_state, without spending a model call.
 #
-# Only the Oracle script carries the last two. One domain proving a method-layer behaviour is the
-# proof; repeating it per domain would buy nothing but run time.
+# The Oracle script carries all three. The Kubernetes one carries a correction too, because "it
+# works" having only ever been demonstrated in one domain is exactly the doubt this suite exists
+# to remove - and going back is the behaviour whose bookkeeping could plausibly be domain-shaped.
+# The ambiguity provocation stays Oracle-only: it needs two curated options sharing a leading
+# phrase, which is a property of a pack rather than of the designer, and the Kubernetes options
+# (AKS, EKS, GKE) share none.
 SCRIPTS: dict[str, tuple[str, ...]] = {
     "oracle_database_patching": (
         "Build me an agent network for Oracle db patching",
@@ -97,6 +101,8 @@ SCRIPTS: dict[str, tuple[str, ...]] = {
         "Build me an agent network to upgrade our Kubernetes clusters",
         "AKS, three clusters: dev, staging and prod.",
         "1.29 to 1.31, one minor at a time.",
+        "go back to Q1 - I got the platform wrong",
+        "EKS",
         "assume sensible defaults for anything still open",
         "APPROVED",
     ),
@@ -234,7 +240,8 @@ def test_a_live_deliberation_follows_the_promised_behaviour(domain_id):
             "the designer never sent an ambiguous answer back for a choice, so this run did not "
             f"exercise the behaviour the script provokes. Transcript: {recorded}"
         )
-        assert result.revisits >= 1, (
-            "the user asked to change an earlier answer and the designer never took them back to "
-            f"it. Transcript: {recorded}"
-        )
+    assert result.revisits >= 1, (
+        "the user asked to change an earlier answer and the designer never took them back to it. "
+        f"Asserted for every domain, because going back is how the interview works rather than a "
+        f"property of one pack. Transcript: {recorded}"
+    )

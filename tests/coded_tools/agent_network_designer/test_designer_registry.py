@@ -34,7 +34,10 @@ The rest assert the properties the deliberation design claims but which nothing 
 Each is a property a plausible-looking prompt edit can silently break.
 """
 
+import ast
+import io
 import re
+import tokenize
 from pathlib import Path
 from typing import Any
 
@@ -239,6 +242,60 @@ def test_the_method_layer_names_no_domain(front_man, agents):
         )
 
     assert not found, "domain vocabulary leaked into the method layer:\n  " + "\n  ".join(found)
+
+
+def test_no_domain_vocabulary_reaches_the_method_layers_executable_code():
+    """
+    The industry-agnostic claim, extended to the code that runs.
+
+    The test above covers the prompt and the tool descriptions, which is where a domain noun
+    changes what the MODEL does. It says nothing about the Python, which is where a domain noun
+    changes what the SOFTWARE does - a default naming one domain's tooling, a regex tuned to one
+    domain's phrasing, an option list with a fallback somebody hard-coded while debugging. That
+    class of leak is worse than a leaky prompt, because it survives every prompt rewrite and is
+    invisible to a reader of the registry.
+
+    Comments and docstrings are stripped first, deliberately. A worked example in a real domain is
+    how a docstring explains a format to a human, and banning it would trade a genuine
+    clarification for a rule. The prompt is the opposite case - a model reading a worked example
+    learns that domain's vocabulary and carries it elsewhere - which is why the two tests differ.
+    """
+    offenders: list[str] = []
+    for path in sorted(Path("coded_tools/agent_network_designer").glob("*.py")):
+        code: str = _executable_code(path)
+        offenders.extend(
+            f"{noun!r} in {path.name}"
+            for noun in DOMAIN_NOUNS
+            if re.search(rf"\b{re.escape(noun)}\b", code.lower()) is not None
+        )
+
+    assert not offenders, "domain vocabulary reached the method layer's code:\n  " + "\n  ".join(offenders)
+
+
+def _executable_code(path: Path) -> str:
+    """
+    Read a module with its comments and docstrings removed.
+
+    :param path: The module to read.
+    :return: Its source, minus everything that only documents it.
+    """
+    kept = [
+        token
+        for token in tokenize.generate_tokens(io.StringIO(path.read_text(encoding="utf-8")).readline)
+        if token.type != tokenize.COMMENT
+    ]
+    tree: ast.Module = ast.parse(tokenize.untokenize(kept))
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        first = node.body[0] if node.body else None
+        if (
+            isinstance(first, ast.Expr)
+            and isinstance(first.value, ast.Constant)
+            and isinstance(first.value.value, str)
+        ):
+            first.value.value = ""
+    return ast.unparse(tree)
 
 
 def test_the_shared_scoping_preamble_survived_the_hocon_concatenation(front_man):
