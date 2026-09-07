@@ -23,24 +23,57 @@ jobs:
       python-version: '3.13'
       run-hadolint: true
       dockerfile-path: 'deploy/Dockerfile'
-      lint-command-override: |
-        set -e
-        VIRTUAL_ENV=system make lint-check
-        curl --silent --location \
-          https://github.com/lycheeverse/lychee/releases/download/lychee-v0.24.1/lychee-x86_64-unknown-linux-gnu.tar.gz \
-          | tar --extract --gzip --directory /tmp --strip-components=1
-        # To prevent flaky CI failures, accept:
-        # - 2xx (all success codes, e.g. 202 Accepted for endpoints that process asynchronously)
-        # - 401 (Unauthorized) for API endpoints that require authentication
-        # - 403 (Forbidden) if the server blocks bots or requests without a browser-like User-Agent
-        # - 405 (Method Not Allowed) for MCP/API endpoints that only accept POST, not GET
-        # - 406 (Not Acceptable) for MCP/API endpoints that serve non-HTML formats
-        # - 422 (Unprocessable Entity) for API endpoints that require query parameters
-        # - 429 (rate limit)
-        # - 502 (bad gateway) if the server is reachable but its backend momentarily failed to respond
-        # - 503 (temporary outage)
-        /tmp/lychee --max-retries 3 --retry-wait-time 3 --max-concurrency 32 --verbose --accept '200..=299,401,403,405,406,422,429,502,503' --exclude-path venv --include-verbatim '**/*.py' '**/*.md' '**/*.rst' '**/*.hocon' '**/*.txt' '**/*.yaml' '**/*.yml' '**/*.json' '**/*.html' '**/*.sh' .
+      lint-command-override: 'VIRTUAL_ENV=system make lint-check'
       test-command-override: 'VIRTUAL_ENV=system AGENT_TOOL_PATH=./neuro_san/coded_tools PYTHONPATH=.:$PYTHONPATH make test'
       check-readme-pypi: true
     secrets:
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  # Link checking runs as its OWN job, not inside lint-command-override.
+  #
+  # It used to be appended to that override, which is a single `set -e` script: lint, then lychee.
+  # So a third party retiring a URL aborted the script before the test step ever ran, and a red
+  # quality-gate meant "some link somewhere is dead" and "the test suite is broken" equally - with
+  # no way to tell which from the check name. Link rot is real and continuous; it must not be able
+  # to mask whether the code works.
+  #
+  # Kept blocking rather than advisory: a dead link in the documentation is still a defect worth a
+  # red mark. It is just a different defect from a failing test, and now says so.
+  link-check:
+    if: >
+      (github.event_name == 'push' && github.ref != 'refs/heads/main') ||
+      (github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name != github.repository)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Check links
+        run: |
+          set -e
+          curl --silent --location \
+            https://github.com/lycheeverse/lychee/releases/download/lychee-v0.24.1/lychee-x86_64-unknown-linux-gnu.tar.gz \
+            | tar --extract --gzip --directory /tmp --strip-components=1
+          # To prevent flaky CI failures, accept:
+          # - 2xx (all success codes, e.g. 202 Accepted for endpoints that process asynchronously)
+          # - 401 (Unauthorized) for API endpoints that require authentication
+          # - 403 (Forbidden) if the server blocks bots or requests without a browser-like User-Agent
+          # - 405 (Method Not Allowed) for MCP/API endpoints that only accept POST, not GET
+          # - 406 (Not Acceptable) for MCP/API endpoints that serve non-HTML formats
+          # - 422 (Unprocessable Entity) for API endpoints that require query parameters
+          # - 429 (rate limit)
+          # - 502 (bad gateway) if the server is reachable but its backend momentarily failed to respond
+          # - 503 (temporary outage)
+          #
+          # agenttools.wolfram.com is excluded because the endpoint was RETIRED upstream, not
+          # because it is awkward to check: a plain GET and a JSON-RPC POST both return a genuine
+          # Apache 404 page, so the 405/406 allowances above do not cover it. That makes the
+          # wolfram_mcp example non-functional at run time, which is a product decision - repoint
+          # it at the current endpoint or drop the example - and not something a link checker can
+          # resolve. Excluded here so one retired third-party URL cannot hold up every branch.
+          /tmp/lychee --max-retries 3 --retry-wait-time 3 --max-concurrency 32 --verbose \
+            --accept '200..=299,401,403,405,406,422,429,502,503' \
+            --exclude 'agenttools\.wolfram\.com' \
+            --exclude-path venv --include-verbatim \
+            '**/*.py' '**/*.md' '**/*.rst' '**/*.hocon' '**/*.txt' '**/*.yaml' '**/*.yml' '**/*.json' '**/*.html' '**/*.sh' .
