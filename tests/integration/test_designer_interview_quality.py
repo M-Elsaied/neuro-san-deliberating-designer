@@ -52,6 +52,7 @@ from coded_tools.agent_network_designer.interview_review import InterviewResult
 from coded_tools.agent_network_designer.interview_review import Turn
 from coded_tools.agent_network_designer.interview_review import render_report
 from coded_tools.agent_network_designer.interview_review import review_interview
+from coded_tools.agent_network_designer.interview_state import INTERVIEW_LOG
 from coded_tools.agent_network_designer.knowledge_pack import KnowledgePack
 from coded_tools.agent_network_designer.pack_catalogue import load_catalogue
 from coded_tools.agent_network_designer.pack_catalogue import load_pack
@@ -102,22 +103,41 @@ SCRIPTS: dict[str, tuple[str, ...]] = {
 }
 
 
-def _one_designer_reply(prompt: str, session: Any, processor: Any, input_processor: Any) -> str:
+def _one_designer_reply(
+    prompt: str, session: Any, processor: Any, input_processor: Any, sly_data: dict[str, Any]
+) -> dict[str, Any]:
     """
     Send one user turn and collect the designer's reply.
+
+    formulate_chat_request takes (user_input, sly_data, chat_context) in that order, and the
+    sly_data has to go back out with the next turn. Both matter more than they look:
+
+      * passing the chat context POSITIONALLY lands it in the sly_data slot, so the turn carries no
+        history at all. This function did exactly that, which made a "multi-turn deliberation" a
+        series of unrelated first turns - the designer re-matched the domain on every reply and no
+        answer was ever built on. Found by driving the real thing over HTTP;
+      * session sly_data is rebuilt from the client's payload each turn, so a key the server wrote
+        is gone unless the client sends it back. That is where the interview lives, so not
+        returning it restarts the interview on every turn.
 
     :param prompt: The user turn to send.
     :param session: The agent session.
     :param processor: The message processor accumulating the answer.
     :param input_processor: The streaming input processor.
-    :return: The designer's compiled reply.
+    :param sly_data: The sly_data from the previous turn, to carry forward.
+    :return: The designer's compiled reply, and the sly_data to send with the next turn.
     """
-    request: dict[str, Any] = input_processor.formulate_chat_request(prompt, processor.get_chat_context())
+    request: dict[str, Any] = input_processor.formulate_chat_request(
+        prompt, sly_data=sly_data, chat_context=processor.get_chat_context()
+    )
     empty: dict[str, Any] = {}
+    carried: dict[str, Any] = sly_data
     for chat_response in session.streaming_chat(request):
         message: dict[str, Any] = chat_response.get("response", empty)
         processor.process_message(message, chat_response.get("type"))
-    return processor.get_compiled_answer() or ""
+        if message.get("sly_data", {}).get(INTERVIEW_LOG) is not None:
+            carried = dict(message["sly_data"])
+    return {"reply": processor.get_compiled_answer() or "", "sly_data": carried}
 
 
 def _run_deliberation(domain_id: str) -> list[Turn]:
@@ -139,10 +159,12 @@ def _run_deliberation(domain_id: str) -> list[Turn]:
     processor: Any = input_processor.get_message_processor()
 
     turns: list[Turn] = []
+    sly_data: dict[str, Any] = {}
     for prompt in SCRIPTS[domain_id]:
         turns.append(Turn(role=ROLE_USER, text=prompt))
-        reply: str = _one_designer_reply(prompt, session, processor, input_processor)
-        turns.append(Turn(role=ROLE_DESIGNER, text=reply))
+        outcome: dict[str, Any] = _one_designer_reply(prompt, session, processor, input_processor, sly_data)
+        sly_data = outcome["sly_data"]
+        turns.append(Turn(role=ROLE_DESIGNER, text=outcome["reply"]))
     return turns
 
 

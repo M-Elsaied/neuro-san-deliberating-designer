@@ -477,6 +477,13 @@ class InterviewState:
                     candidates=tuple(tied),
                     note=entry.why,
                 )
+            # A shortening that fits exactly ONE option has identified it, so record the curated
+            # wording rather than the shorthand. "approved by CAB" names one option and no other, and
+            # storing it as typed drops the system the option named - so the brief would read
+            # "Approval: approved by CAB", and the agent built from it would enforce a gate whose
+            # change record nobody wrote down. Two or more matches is the branch above; one is an
+            # answer, and the pack already has the words for it.
+            picked = _sole_match(text, entry.options)
 
         return self._store(picked or text, assumed=False)
 
@@ -698,6 +705,29 @@ class InterviewState:
             candidates=tuple(candidates),
             note=f"{len(hits)} entries matched",
         )
+
+
+def _sole_match(reply: str, options: tuple[str, ...]) -> str | None:
+    """
+    The one option a reply identifies, when it identifies exactly one.
+
+    Same containment test as tied_options, and deliberately so: the two are the branches of one
+    question - how many of the offered options is this reply consistent with? More than one and it
+    settles nothing; exactly one and it has chosen, in fewer words than the pack uses.
+
+    :param reply: What the user said.
+    :param options: The options that were offered.
+    :return: That option's curated text, or None when the reply matches none of them.
+    """
+    key: str = option_key(reply)
+    if not key:
+        return None
+    matched: list[str] = [
+        option
+        for option in options
+        if not is_escape(option) and key != option_key(option) and key in option_key(option)
+    ]
+    return matched[0] if len(matched) == 1 else None
 
 
 def _subject_words(text: str) -> list[str]:

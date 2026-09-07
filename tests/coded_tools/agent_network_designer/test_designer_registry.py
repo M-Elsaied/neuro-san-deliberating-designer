@@ -300,6 +300,24 @@ def test_the_interview_is_driven_by_the_tool_rather_than_remembered(front_man):
     assert "InterviewLog" in front_man.get("tools", []), "the front man is not wired to the tool"
 
 
+def test_the_tool_payload_is_never_shown_to_the_user(front_man):
+    """
+    Both faults a live run exposed, in one place.
+
+    The designer printed InterviewLog's entire JSON reply into the chat on one turn - status, log,
+    confirmed, braces and all - and on another it shortened the ambiguity re-ask to the two options
+    it judged relevant, which dropped "something else" and "I am not sure" and left a user whose
+    answer was not listed no honest reply. The tool returning finished text only helps if the text
+    is what gets printed.
+    """
+    phase_a: str = collapse(str(front_man.get("instructions") or "")).split("PHASE B")[0]
+
+    assert 'PRINT THE "prompt" STRING AND NOTHING ELSE FROM THE TOOL' in phase_a
+    assert "Do NOT print the tool's reply as JSON" in phase_a
+    assert 'Print "prompt" EXACTLY as given: every line, in order, unedited' in phase_a
+    assert 'removes "something else" and "I am not sure"' in phase_a
+
+
 def test_an_ambiguous_answer_may_not_be_settled_by_assuming(front_man):
     """
     The interview's whole claim is that it separates what you confirmed from what it assumed.

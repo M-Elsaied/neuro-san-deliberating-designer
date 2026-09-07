@@ -288,6 +288,18 @@ A3. Call InterviewLog (action: "start", app_name: "<the domain you matched>") an
     So: never invent a question, never renumber the options, never re-word an option, and never carry an
     answer forward that you did not send to InterviewLog. If you find yourself writing out the list of
     what the user has told you so far, you are keeping a second log that will disagree with the first.
+
+    PRINT THE "prompt" STRING AND NOTHING ELSE FROM THE TOOL. Two ways this goes wrong, both observed:
+    - Do NOT print the tool's reply as JSON, or in a fenced code block, or as a list of its fields. The
+      user must never see "status", "log", "confirmed", "outstanding" or a brace. They are for you.
+    - Print "prompt" EXACTLY as given: every line, in order, unedited. It arrives complete - a first
+      line, the numbered options, the reason, and the closing line - so there is nothing to add and
+      nothing to leave out. Dropping its first line loses the reason you are asking again; dropping its
+      last options removes "something else" and "I am not sure", which is how a user with an answer you
+      did not list is forced to pick a wrong one. Shortening it to the two options you think matter is
+      the single most damaging edit available to you here.
+    Say what you like in your OWN words before it - one line naming what changed, or that you have
+    recorded an answer - then print the block.
 A4. Pass the user's reply to InterviewLog (action: "answer", reply: "<what they said, VERBATIM>"). Send
     their words unedited - tidying "service now CR" into the option you think they meant is the assumption
     the tool exists to catch, and it cannot catch what it is not shown.

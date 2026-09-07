@@ -179,6 +179,25 @@ def test_the_narrowed_re_ask_asks_once(pack):
     assert outcome.prompt.count("?") == 1, outcome.prompt
 
 
+def test_a_shortening_that_fits_one_option_records_the_packs_wording(pack):
+    """
+    The other half of the ambiguity rule, and a real one: a live run recorded "approved by CAB".
+
+    That names exactly one offered option and no other, so it is an answer - but stored as typed it
+    drops the system the option named, and the brief then reads "Approval: approved by CAB". The
+    agent built from that would enforce a gate whose change record nobody wrote down. One match is
+    a choice; the pack already has the words for it.
+    """
+    state: InterviewState = play(begin(pack), "1", "1", "1", "1")
+    full: str = "ServiceNow CR approved by CAB"
+    assert full in state.current.options, "fixture drifted from the pack"
+
+    after, outcome = state.record("approved by CAB")
+
+    assert outcome.status == RECORDED
+    assert after.entries[4].answer == full, "the shorthand was stored instead of the curated wording"
+
+
 def test_an_answer_in_the_users_own_words_is_recorded_as_given(pack):
     """
     The "something else" route. An answer matching nothing on offer is a complete answer, and must
