@@ -29,6 +29,12 @@ https://api.anthropic.com/
 https://api.smith.langchain.com/
 https://api.salesforce.com
 
+# Retired upstream endpoints, kept in docs until a replacement is published.
+# Wolfram took this MCP endpoint down between 2026-08-25 and 2026-09-07; it now
+# 404s on both GET and POST, so --accept cannot cover it. The wolfram_mcp
+# example does not work until Wolfram publishes a new URL.
+https://agenttools.wolfram.com/mcp
+
 # Ignores Jinja2 "{{.*}}" template pattern
 file://.*%7B%7B.*%7D%7D
 
