@@ -1,6 +1,6 @@
 {
   "domain": "oracle_database_patching",
-  "note": "Hand-authored fixture. See tests/.../test_interview_review.py.",
+  "note": "Designer question turns are the literal output of interview_state.render(), so this fixture and the running tool cannot drift apart. See tests/.../test_interview_review.py.",
   "turns": [
     {
       "role": "user",
@@ -8,15 +8,15 @@
     },
     {
       "role": "designer",
-      "text": "Matched the curated domain Oracle database patching.\n\nFirst, what is the topology of the estate - single instance, RAC, Data Guard standby, or Exadata? It decides whether we can patch rolling or need a full outage."
+      "text": "Matched the curated domain Oracle database patching.\n\nTopology: single instance, RAC, Data Guard standby, or Exadata?\n  1. single instance, no standby\n  2. two-node RAC\n  3. RAC + physical standby\n  4. Exadata X8M\n  5. Something else - I will describe it\n  6. I am not sure - choose a sensible default for me\n\nDecides rolling versus a full outage, and whether a standby has to be patched too.\nReply with a number, or in your own words. Say \"go back\" to change an earlier answer."
     },
     {
       "role": "user",
-      "text": "Two-node RAC in prod with a Data Guard standby; dev and QA single instance."
+      "text": "2, and dev and QA are single instance."
     },
     {
       "role": "designer",
-      "text": "Understood. How many databases are in scope, and in what order do the environments go?"
+      "text": "Estate and order: which environments, how many databases, and what promotion order?\n  1. DEV to QA to PROD\n  2. only PROD this cycle\n  3. DEV/QA shared, PROD separate\n  4. Something else - I will describe it\n  5. I am not sure - choose a sensible default for me\n\nSets the wave plan and how many patch runs are needed.\nReply with a number, or in your own words. Say \"go back\" to change an earlier answer."
     },
     {
       "role": "user",
@@ -24,23 +24,23 @@
     },
     {
       "role": "designer",
-      "text": "Thanks. What maintenance window do you have, and can PROD take a full outage?"
+      "text": "Window: change window length and downtime tolerance - is a rolling patch required?\n  1. 4 hours, rolling required\n  2. 8 hours, full outage acceptable\n  3. no fixed window\n  4. Something else - I will describe it\n  5. I am not sure - choose a sensible default for me\n\nDecides node-by-node rolling versus a single outage window.\nReply with a number, or in your own words. Say \"go back\" to change an earlier answer."
     },
     {
       "role": "user",
-      "text": "Four-hour Saturday window, PROD rolling with no full outage."
+      "text": "1"
     },
     {
       "role": "designer",
-      "text": "Who takes the backup, and is a verified restore point required?"
+      "text": "Backup ownership: who takes the RMAN backup, and is a verified restore point required before the window opens?\n  1. DBA team, verified restore required\n  2. platform team, no restore test\n  3. guaranteed restore point instead of a new full backup\n  4. Something else - I will describe it\n  5. I am not sure - choose a sensible default for me\n\nDetermines the backup gate agent and whether patching may start.\nReply with a number, or in your own words. Say \"go back\" to change an earlier answer."
     },
     {
       "role": "user",
-      "text": "DBA team takes the RMAN backup, verified restore point required."
+      "text": "1"
     },
     {
       "role": "designer",
-      "text": "How is production change-gated?"
+      "text": "Approval: which change record gates production, and who approves it?\n  1. ServiceNow CR approved by CAB\n  2. ServiceNow CR approved by the app owner\n  3. no formal gate in non-prod\n  4. Something else - I will describe it\n  5. I am not sure - choose a sensible default for me\n\nDetermines the change-control gate before any production work.\nReply with a number, or in your own words. Say \"go back\" to change an earlier answer."
     },
     {
       "role": "user",
@@ -48,15 +48,23 @@
     },
     {
       "role": "designer",
-      "text": "What is the rollback path, and who signs off connectivity afterwards?"
+      "text": "Rollback: expected rollback route?\n  1. opatch rollback\n  2. flashback to a guaranteed restore point\n  3. restore from backup\n  4. Something else - I will describe it\n  5. I am not sure - choose a sensible default for me\n\nDecides what the rollback agent must be able to execute.\nReply with a number, or in your own words. Say \"go back\" to change an earlier answer."
     },
     {
       "role": "user",
-      "text": "opatch rollback, and the DBA team signs off connectivity."
+      "text": "1"
     },
     {
       "role": "designer",
-      "text": "## DESIGN BRIEF - OraclePatchingNetwork\n\n**Scope**\nAutomates RU application across the estate. Does not cover Exadata firmware.\n\n**Confirmed requirements** _(what you told me)_\n- Topology: two-node RAC in prod with a Data Guard standby\n- Window: four-hour Saturday window\n\n**Operating standards enforced** _(from curated knowledge)_\n- **ODB-01** - Apply the latest Release Update (RU) whenever possible; prefer an RU over one-off patches.\n- **ODB-02** - Keep OPatch updated: verify and upgrade OPatch to the minimum version the RU README requires, before applying the patch.\n- **ODB-03** - Take a full RMAN backup before applying any patch, and confirm the backup is restorable.\n- **ODB-04** - Run datapatch after applying the database binaries; the patch is not complete, and the environment is not handed back, until datapatch has succeeded.\n- **ODB-05** - Review the Oracle Support (MOS) patch README and its known-issues notes carefully before implementation.\n- **ODB-06** - Validate application connectivity after patching, before returning the environment to service.\n\n\n**Assumptions I made** _(tell me if any are wrong)_\n- Rollback: opatch rollback, since you did not specify\n\n**Out of scope**\n- Exadata firmware\n\n**Proposed network shape**\n- Top: patch_coordinator\n- Then: readiness_gate, backup_gate\n- Leaves: ru_applicator, patch_validator\n\nReply APPROVED to build this, or tell me what to change.\n"
+      "text": "Post-check sign-off: who validates application connectivity and signs the environment back into service?\n  1. DBA team\n  2. application owner\n  3. operations/NOC synthetic checks\n  4. Something else - I will describe it\n  5. I am not sure - choose a sensible default for me\n\nDefines the hand-back gate and its owner.\nReply with a number, or in your own words. Say \"go back\" to change an earlier answer."
+    },
+    {
+      "role": "user",
+      "text": "1"
+    },
+    {
+      "role": "designer",
+      "text": "## DESIGN BRIEF - OraclePatchingNetwork\n\n**Scope**\nAutomates RU application across the estate. Does not cover Exadata firmware.\n\n**Confirmed requirements** _(what you told me)_\n- Topology: two-node RAC in prod with a Data Guard standby\n- Window: four-hour Saturday window\n- Approval: ServiceNow CR approved by CAB\n\n**Operating standards enforced** _(from curated knowledge)_\n- **ODB-01** - Apply the latest Release Update (RU) whenever possible; prefer an RU over one-off patches.\n- **ODB-02** - Keep OPatch updated: verify and upgrade OPatch to the minimum version the RU README requires, before applying the patch.\n- **ODB-03** - Take a full RMAN backup before applying any patch, and confirm the backup is restorable.\n- **ODB-04** - Run datapatch after applying the database binaries; the patch is not complete, and the environment is not handed back, until datapatch has succeeded.\n- **ODB-05** - Review the Oracle Support (MOS) patch README and its known-issues notes carefully before implementation.\n- **ODB-06** - Validate application connectivity after patching, before returning the environment to service.\n\n\n**Assumptions I made** _(tell me if any are wrong)_\n- Estate size: 40 databases patched in three waves, since you did not split them\n\n**Out of scope**\n- Exadata firmware\n\n**Proposed network shape**\n- Top: patch_coordinator\n- Then: readiness_gate, backup_gate\n- Leaves: ru_applicator, patch_validator\n\nReply APPROVED to build this, tell me what to change, or say \"go back\" to revisit an answer.\n"
     },
     {
       "role": "user",
@@ -64,7 +72,7 @@
     },
     {
       "role": "designer",
-      "text": "## Standards coverage\n\n| Standard | Owned by |\n|---|---|\n| **ODB-01** | `readiness_gate` |\n| **ODB-02** | `readiness_gate` |\n| **ODB-03** | `readiness_gate` |\n| **ODB-04** | `readiness_gate` |\n| **ODB-05** | `readiness_gate` |\n| **ODB-06** | `readiness_gate` |\n"
+      "text": "## Standards coverage\n\n| Standard | Owned by |\n|---|---|\n| **ODB-01** | `readiness_gate` |\n| **ODB-02** | `readiness_gate` |\n| **ODB-03** | `readiness_gate` |\n| **ODB-04** | `readiness_gate` |\n| **ODB-05** | `readiness_gate` |\n| **ODB-06** | `readiness_gate` |\n\nAll standards embedded.\n"
     }
   ]
 }

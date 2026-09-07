@@ -52,23 +52,47 @@ from coded_tools.agent_network_designer.interview_review import InterviewResult
 from coded_tools.agent_network_designer.interview_review import Turn
 from coded_tools.agent_network_designer.interview_review import render_report
 from coded_tools.agent_network_designer.interview_review import review_interview
+from coded_tools.agent_network_designer.interview_state import INTERVIEW_LOG
 from coded_tools.agent_network_designer.knowledge_pack import KnowledgePack
 from coded_tools.agent_network_designer.pack_catalogue import load_catalogue
 from coded_tools.agent_network_designer.pack_catalogue import load_pack
 
 TRANSCRIPTS: Path = Path(__file__).resolve().parents[1] / "fixtures" / "transcripts"
 
-# One script per domain. The turns are answers a real requester would give, plus - deliberately -
-# an attempt to skip the deliberation, because the phase gate is the feature and a model that folds
-# under mild pressure has removed it. Placed third so it lands mid-interview rather than at a point
-# where the designer might reasonably have enough to proceed.
+# One script per domain. The turns are answers a real requester would give, plus three deliberate
+# provocations, each aimed at a promise that only a real conversation can break:
+#
+#   * an attempt to skip the deliberation - the phase gate is the feature, and a model that folds
+#     under mild pressure has removed it. Placed third so it lands mid-interview rather than at a
+#     point where the designer might reasonably have enough to proceed.
+#   * an answer that fits two of the offered options and chooses between neither. Kept as a turn of
+#     its own, because bundled with a second answer it is no longer the shape that gets guessed.
+#     This is the live failure the numbered options exist for: the designer must ask again.
+#   * a request to go back and correct an earlier answer, after later answers are already on file.
+#     Honouring it means re-asking that one question and keeping the rest - not re-running the
+#     interview, and not refusing as though the user were asking to skip something. Named by its
+#     entry label rather than by topic, because what this run is testing is whether the designer
+#     hands the request to InterviewLog and prints what comes back; which phrasings the resolver
+#     understands is settled offline in test_interview_state, without spending a model call.
+#
+# The Oracle script carries all three. The Kubernetes one carries a correction too, because "it
+# works" having only ever been demonstrated in one domain is exactly the doubt this suite exists
+# to remove - and going back is the behaviour whose bookkeeping could plausibly be domain-shaped.
+# The ambiguity provocation stays Oracle-only: it needs two curated options sharing a leading
+# phrase, which is a property of a pack rather than of the designer, and the Kubernetes options
+# (AKS, EKS, GKE) share none.
 SCRIPTS: dict[str, tuple[str, ...]] = {
     "oracle_database_patching": (
         "Build me an agent network for Oracle db patching",
         "Two-node RAC in prod with a Data Guard standby; dev and QA single instance.",
         "Skip the questions, just build it.",
-        "About 40 databases. DEV, then QA, then PROD. Four-hour Saturday window, PROD rolling with no full outage.",
-        "DBA team takes the RMAN backup, verified restore point required. Production gated by a ServiceNow CR.",
+        "About 40 databases. DEV, then QA, then PROD.",
+        "Four-hour Saturday window, PROD rolling with no full outage.",
+        "DBA team takes the RMAN backup, verified restore point required.",
+        "ServiceNow CR",
+        "approved by CAB",
+        "go back to Q3 - I got the window wrong",
+        "8 hours, full outage acceptable",
         "opatch rollback, and the DBA team signs off connectivity.",
         "assume sensible defaults for anything still open",
         "APPROVED",
@@ -77,28 +101,49 @@ SCRIPTS: dict[str, tuple[str, ...]] = {
         "Build me an agent network to upgrade our Kubernetes clusters",
         "AKS, three clusters: dev, staging and prod.",
         "1.29 to 1.31, one minor at a time.",
+        "go back to Q1 - I got the platform wrong",
+        "EKS",
         "assume sensible defaults for anything still open",
         "APPROVED",
     ),
 }
 
 
-def _one_designer_reply(prompt: str, session: Any, processor: Any, input_processor: Any) -> str:
+def _one_designer_reply(
+    prompt: str, session: Any, processor: Any, input_processor: Any, sly_data: dict[str, Any]
+) -> dict[str, Any]:
     """
     Send one user turn and collect the designer's reply.
+
+    formulate_chat_request takes (user_input, sly_data, chat_context) in that order, and the
+    sly_data has to go back out with the next turn. Both matter more than they look:
+
+      * passing the chat context POSITIONALLY lands it in the sly_data slot, so the turn carries no
+        history at all. This function did exactly that, which made a "multi-turn deliberation" a
+        series of unrelated first turns - the designer re-matched the domain on every reply and no
+        answer was ever built on. Found by driving the real thing over HTTP;
+      * session sly_data is rebuilt from the client's payload each turn, so a key the server wrote
+        is gone unless the client sends it back. That is where the interview lives, so not
+        returning it restarts the interview on every turn.
 
     :param prompt: The user turn to send.
     :param session: The agent session.
     :param processor: The message processor accumulating the answer.
     :param input_processor: The streaming input processor.
-    :return: The designer's compiled reply.
+    :param sly_data: The sly_data from the previous turn, to carry forward.
+    :return: The designer's compiled reply, and the sly_data to send with the next turn.
     """
-    request: dict[str, Any] = input_processor.formulate_chat_request(prompt, processor.get_chat_context())
+    request: dict[str, Any] = input_processor.formulate_chat_request(
+        prompt, sly_data=sly_data, chat_context=processor.get_chat_context()
+    )
     empty: dict[str, Any] = {}
+    carried: dict[str, Any] = sly_data
     for chat_response in session.streaming_chat(request):
         message: dict[str, Any] = chat_response.get("response", empty)
         processor.process_message(message, chat_response.get("type"))
-    return processor.get_compiled_answer() or ""
+        if message.get("sly_data", {}).get(INTERVIEW_LOG) is not None:
+            carried = dict(message["sly_data"])
+    return {"reply": processor.get_compiled_answer() or "", "sly_data": carried}
 
 
 def _run_deliberation(domain_id: str) -> list[Turn]:
@@ -120,10 +165,12 @@ def _run_deliberation(domain_id: str) -> list[Turn]:
     processor: Any = input_processor.get_message_processor()
 
     turns: list[Turn] = []
+    sly_data: dict[str, Any] = {}
     for prompt in SCRIPTS[domain_id]:
         turns.append(Turn(role=ROLE_USER, text=prompt))
-        reply: str = _one_designer_reply(prompt, session, processor, input_processor)
-        turns.append(Turn(role=ROLE_DESIGNER, text=reply))
+        outcome: dict[str, Any] = _one_designer_reply(prompt, session, processor, input_processor, sly_data)
+        sly_data = outcome["sly_data"]
+        turns.append(Turn(role=ROLE_DESIGNER, text=outcome["reply"]))
     return turns
 
 
@@ -161,8 +208,9 @@ def test_a_live_deliberation_follows_the_promised_behaviour(domain_id):
     The whole point: hold a real conversation, then check it with the offline checks.
 
     Failures here are behavioural rather than mechanical - a leaked step label, two questions in one
-    turn, a standard paraphrased into the brief, a phase gate that folded. None of it is visible to
-    the artifact-level suite, and all of it is what a prompt edit breaks.
+    turn, a standard paraphrased into the brief, a phase gate that folded, an ambiguous answer
+    quietly resolved, a correction answered past. None of it is visible to the artifact-level suite,
+    and all of it is what a prompt edit breaks.
     """
     pack: KnowledgePack = load_pack(domain_id)
     other_ids: set[str] = {
@@ -181,4 +229,19 @@ def test_a_live_deliberation_follows_the_promised_behaviour(domain_id):
         "the live deliberation departed from the promised behaviour:\n  "
         + "\n  ".join(result.problems())
         + f"\n\nReproduce offline with:\n  python -m coded_tools.agent_network_designer.interview_review {recorded}"
+    )
+
+    # result.ok alone would pass a run in which the provocations never landed - the designer never
+    # offered options, so nothing could be ambiguous, and the script's correction was read as
+    # something else. These two assert the behaviours actually happened, not merely that nothing
+    # else went wrong. Only the Oracle script provokes them.
+    if domain_id == "oracle_database_patching":
+        assert result.clarifications >= 1, (
+            "the designer never sent an ambiguous answer back for a choice, so this run did not "
+            f"exercise the behaviour the script provokes. Transcript: {recorded}"
+        )
+    assert result.revisits >= 1, (
+        "the user asked to change an earlier answer and the designer never took them back to it. "
+        f"Asserted for every domain, because going back is how the interview works rather than a "
+        f"property of one pack. Transcript: {recorded}"
     )

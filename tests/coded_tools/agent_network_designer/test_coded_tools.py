@@ -26,14 +26,18 @@ No language model: the tools are invoked directly with the args and sly_data the
 """
 
 import asyncio
+import json
 from typing import Any
 
 import pytest
 
 from coded_tools.agent_network_designer.extract_docs import ExtractDocs
+from coded_tools.agent_network_designer.interview_log import InterviewLog
+from coded_tools.agent_network_designer.interview_state import INTERVIEW_LOG
 from coded_tools.agent_network_designer.knowledge_pack import PACK_PROVENANCE
 from coded_tools.agent_network_designer.knowledge_pack import KnowledgePack
 from coded_tools.agent_network_designer.list_domains import ListDomains
+from coded_tools.agent_network_designer.pack_catalogue import load_catalogue
 from coded_tools.agent_network_designer.pack_catalogue import load_pack
 from coded_tools.agent_network_designer.verify_standards import VerifyStandards
 from tests.coded_tools.agent_network_designer.network_fixtures import reference_network
@@ -282,3 +286,253 @@ def test_the_async_entry_points_match_the_sync_ones(built):
     assert asyncio.run(VerifyStandards().async_invoke({"app_name": DOMAIN}, built)) == VerifyStandards().invoke(
         {"app_name": DOMAIN}, built
     )
+
+
+# --------------------------------------------------------------------------------------
+# InterviewLog: the state the front man no longer has to remember
+# --------------------------------------------------------------------------------------
+
+
+def drive(*calls: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """
+    Run a sequence of InterviewLog calls against one session's sly_data.
+
+    :param calls: The argument dictionaries, in order.
+    :return: The last result, and the sly_data it left behind.
+    """
+    tool, sly_data = InterviewLog(), {}
+    result: Any = None
+    for call in calls:
+        result = tool.invoke(call, sly_data)
+        assert not isinstance(result, str), result
+    return result, sly_data
+
+
+def test_interview_log_starts_an_interview_and_stores_it():
+    """
+    The first call has to leave state behind, or nothing after it can work.
+    """
+    result, sly_data = drive({"action": "start", "app_name": "oracle_database_patching"})
+
+    assert result["label"] == "Q1"
+    assert result["outstanding"] == 7
+    assert "1." in result["prompt"], "the first question came back with no numbered options"
+    assert INTERVIEW_LOG in sly_data, "the interview was not written to sly_data"
+
+
+def test_interview_log_carries_answers_across_calls():
+    """
+    Each call reads the state the last one wrote. This is the whole mechanism.
+    """
+    result, _ = drive(
+        {"action": "start", "app_name": "oracle_database_patching"},
+        {"action": "answer", "reply": "2"},
+        {"action": "answer", "reply": "1"},
+    )
+
+    assert result["outstanding"] == 5
+    assert result["label"] == "Q2"
+    assert len(result["log"]) == 3
+
+
+def test_interview_log_reports_an_ambiguous_reply_without_recording_it():
+    """
+    The live failure, through the interface the designer actually calls.
+    """
+    result, _ = drive(
+        {"action": "start", "app_name": "oracle_database_patching"},
+        *[{"action": "answer", "reply": "1"} for _ in range(4)],
+        {"action": "answer", "reply": "service now CR"},
+    )
+
+    assert result["status"] == "ambiguous"
+    assert len(result["candidates"]) == 2
+    assert result["outstanding"] == 3, "an ambiguous reply was recorded as an answer"
+
+
+def test_interview_log_takes_the_user_back_and_keeps_the_rest():
+    """
+    Going back through the tool, with the answers either side left alone.
+    """
+    result, _ = drive(
+        {"action": "start", "app_name": "oracle_database_patching"},
+        *[{"action": "answer", "reply": "1"} for _ in range(5)],
+        {"action": "back", "target": "Q2"},
+    )
+
+    assert result["status"] == "reopened"
+    assert result["label"] == "Q2"
+    assert result["outstanding"] == 2, "going back discarded answers it should have kept"
+    assert "(currently on file)" in result["prompt"]
+
+
+def test_interview_log_flags_a_default_as_assumed():
+    """
+    The flag the brief's separation of confirmed from assumed depends on.
+    """
+    result, _ = drive(
+        {"action": "start", "app_name": "oracle_database_patching"},
+        {"action": "assume", "default": "single instance, no standby"},
+    )
+
+    assert "(assumed)" in result["log"][0]
+
+
+def test_interview_log_refuses_to_restart_when_the_state_was_not_carried():
+    """
+    The failure that would be worst if it were quiet: an interview silently beginning again, with
+    the user answering the same questions and no explanation of why.
+
+    The error also names the sly_data declaration, because a missing to_upstream entry is the one
+    way this happens in a real deployment and the symptom looks nothing like the cause.
+    """
+    outcome: Any = InterviewLog().invoke({"action": "answer", "reply": "2"}, {})
+
+    assert isinstance(outcome, str) and outcome.startswith("Error:")
+    assert "allow.to_upstream.sly_data" in outcome
+    assert INTERVIEW_LOG in outcome
+
+
+@pytest.mark.parametrize(
+    ("call", "fragment"),
+    [
+        ({"action": "sideways"}, "Unknown action"),
+        ({"action": "start"}, "No domain given"),
+        ({"action": "start", "app_name": "no_such_domain"}, "Could not load"),
+    ],
+)
+def test_interview_log_reports_usage_errors_as_errors(call, fragment):
+    """
+    A tool the model drives by name needs its misuse to come back readable.
+    """
+    outcome: Any = InterviewLog().invoke(call, {})
+
+    assert isinstance(outcome, str)
+    assert fragment in outcome
+
+
+@pytest.mark.parametrize("action", ["answer", "assume"])
+def test_interview_log_needs_something_to_record(action):
+    """
+    An empty reply is not an answer, and must not be stored as one.
+    """
+    _, sly_data = drive({"action": "start", "app_name": "oracle_database_patching"})
+    outcome: Any = InterviewLog().invoke({"action": action, action_key(action): "   "}, sly_data)
+
+    assert isinstance(outcome, str) and outcome.startswith("Error:")
+
+
+def action_key(action: str) -> str:
+    """
+    :param action: The action being called.
+    :return: The argument that action reads its text from.
+    """
+    return "reply" if action == "answer" else "default"
+
+
+def test_interview_log_async_invoke_matches_invoke():
+    """
+    The async path is an adapter, not a second implementation.
+    """
+    tool, sly_data = InterviewLog(), {}
+    started: Any = asyncio.run(
+        tool.async_invoke({"action": "start", "app_name": "oracle_database_patching"}, sly_data)
+    )
+    answered: Any = asyncio.run(tool.async_invoke({"action": "answer", "reply": "2"}, sly_data))
+
+    assert started["label"] == "Q1"
+    assert answered["status"] == "recorded"
+    assert answered["log"][0].startswith("Q1.")
+
+
+def test_interview_log_holds_an_interview_for_a_domain_with_no_pack():
+    """
+    Through the interface the designer calls, for a domain this deployment has no pack for.
+
+    Accepts the questions as JSON text as well as a list, because a model passes an array as a
+    string about as often as it passes a real one, and failing on that would push the designer back
+    to asking in prose - which is the behaviour with none of this in it.
+    """
+    questions: list[dict[str, Any]] = [
+        {"question": "How do orders arrive?", "options": ["phone", "web app"], "why": "sets the intake."},
+        {"question": "Who delivers?", "options": ["own riders", "couriers"], "why": "sets dispatch."},
+    ]
+    result, sly_data = drive({"action": "start", "app_name": "pizza_delivery", "questions": json.dumps(questions)})
+
+    assert result["curated"] is False, "a derived interview must not report itself as curated"
+    assert result["label"] == "Q1"
+    assert "1. phone" in result["prompt"]
+    assert INTERVIEW_LOG in sly_data
+
+    # And it stays uncurated across a turn, so a long session cannot forget and start claiming
+    # verified standards for questions the designer made up.
+    tool = InterviewLog()
+    assert tool.invoke({"action": "answer", "reply": "1"}, sly_data)["curated"] is False
+    assert tool.invoke({"action": "back", "target": "go back"}, sly_data)["curated"] is False
+
+
+@pytest.mark.parametrize(
+    ("call", "fragment"),
+    [
+        ({"action": "start", "questions": "{not json"}, "not valid JSON"),
+        ({"action": "start", "questions": {"question": "x"}}, "must be a list"),
+        ({"action": "start", "questions": [{"question": "x", "options": ["a"]}]}, "at least two"),
+    ],
+)
+def test_interview_log_reports_unusable_derived_questions(call, fragment):
+    """
+    The model writes these, so they arrive malformed. The error names what to fix.
+    """
+    outcome: Any = InterviewLog().invoke(call, {})
+
+    assert isinstance(outcome, str)
+    assert fragment in outcome
+
+
+def test_interview_log_needs_either_a_domain_or_questions():
+    """
+    Neither is a usage error, and the message has to name both routes - otherwise the designer
+    learns only that app_name exists and an unmatched domain has no way in.
+    """
+    outcome: Any = InterviewLog().invoke({"action": "start"}, {})
+
+    assert isinstance(outcome, str)
+    assert "no questions to ask" in outcome
+    assert "questions for one this deployment has no pack for" in outcome
+
+
+@pytest.mark.parametrize("domain_id", sorted(one.domain_id for one in load_catalogue()))
+def test_interview_log_drives_a_full_interview_in_every_domain(domain_id):
+    """
+    The tool's tests named one domain throughout, which is how a domain-shaped assumption hides.
+
+    Answers every question of every shipped pack through the tool, then walks back to the first
+    entry and re-answers it - so the parts that could plausibly be Oracle-shaped (the option
+    numbering, the escape offsets, the label sequence, resuming after a correction) are exercised
+    against packs that declare different numbers of options and questions.
+    """
+    pack: KnowledgePack = load_pack(domain_id)
+    tool, sly_data = InterviewLog(), {}
+    result: Any = tool.invoke({"action": "start", "app_name": domain_id}, sly_data)
+    assert not isinstance(result, str), result
+    assert result["curated"] is True
+    assert result["outstanding"] == len(pack.open_variables)
+
+    for _ in pack.open_variables:
+        result = tool.invoke({"action": "answer", "reply": "1"}, sly_data)
+        assert not isinstance(result, str), result
+    assert result["status"] == "complete"
+    assert result["outstanding"] == 0
+    assert len(result["confirmed"]) == len(pack.open_variables)
+
+    # Now correct the very first answer and confirm nothing else moved.
+    before: list[str] = list(result["confirmed"])
+    result = tool.invoke({"action": "back", "target": "take me back to the first question"}, sly_data)
+    assert result["status"] == "reopened", result
+    assert result["label"] == "Q1"
+
+    result = tool.invoke({"action": "answer", "reply": "2"}, sly_data)
+    assert not isinstance(result, str), result
+    after: list[str] = result["confirmed"]
+    assert after[0] != before[0], f"{domain_id}: the correction did not take"
+    assert after[1:] == before[1:], f"{domain_id}: correcting Q1 disturbed a later answer"

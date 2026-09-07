@@ -39,6 +39,27 @@ Ports already taken? `ns run --nsflow-port 4174 --server-http-port 8081`.
 
 - **It deliberates first.** Curated knowledge for the domain is retrieved, then you are interviewed one
   question at a time. Nothing is built until you approve.
+- **Questions are choices, not prose.** Each one arrives as a numbered list of the pack's own example
+  answers, plus *something else* and *not sure* - so you can answer with a number, and an answer that fits
+  two of the options is sent back for a choice instead of being resolved by assumption.
+- **You can go back.** Say *go back* at any point before the build - `back three`, `change question 3`, or
+  just name what you got wrong - as far as the first question and as often as you need. Only the answer you
+  change is re-asked; everything else keeps its value and the interview resumes where it left off.
+- **Any domain, packed or not.** With a pack the questions are the pack's own; without one the designer
+  derives them and starts the same interview with them, so numbered options, ambiguity checks and going
+  back are how the interview works rather than a privilege of the three shipped packs. A pack buys
+  *verified standards* - it is not the price of being able to fix a typo. An interview with no pack behind
+  it reports `curated: false` for its whole life and may never claim a verified standard.
+- **Replies are read, not pattern-matched.** Set `AGENT_NETWORK_DESIGNER_MATCH_MODEL` and a model
+  reads your reply against the options - so *the CAB one*, *the second one* and *the one with a
+  standby* all land correctly, where substring matching found nothing. It only ever proposes
+  candidates: whether that settles the question is still decided in code, so an answer consistent
+  with two options is still queried and a partial answer is still confirmed. Unset, everything falls
+  back to plain containment with no model, no key and no network.
+- **The interview is state, not memory.** The question list, every answer and the current position live in
+  the `InterviewLog` coded tool, not in the model's context. So the options are the pack's own wording by
+  construction, entry labels never shift, and `back three` lands three back - none of which survives being
+  left to a model to remember across a twelve-turn conversation.
 - **Knowledge lives in documents, not in the prompt.** Each domain is a folder - a *knowledge pack* - under
   `coded_tools/agent_network_designer/knowdocs/<domain>/`, read by the `ExtractDocs` coded tool. Packs are
   discovered by scanning that root, so adding a domain is dropping a folder in; point
@@ -47,7 +68,8 @@ Ports already taken? `ns run --nsflow-port 4174 --server-http-port 8081`.
 - **It ends with a design brief** that separates confirmed requirements from flagged assumptions.
 - **Standards stay traceable, and the trace is checked.** Each one appears in its owning agent as
   `MUST: <text> [<id>]`, and the closing coverage table is *computed* by `VerifyStandards` rather than
-  written by the model about its own work. See [knowledge packs](docs/knowledge_packs.md).
+  written by the model about its own work. See [knowledge packs](docs/knowledge_packs.md) and
+  [the deliberation interview](docs/deliberation_interview.md).
 
 | Domain | `app_name` | Standard ids |
 |---|---|---|
@@ -78,7 +100,8 @@ quoted verbatim (*take a full RMAN backup before applying any patch*) - it is **
 knowledge varies per instance and only the requester has it (*RAC or single instance?*) - it is
 **elicited**, one question per turn. Open variables are written as
 `id | question | example answers | why it changes the design`, so the shell can justify a question it does
-not itself understand.
+not itself understand - and the example answers become the numbered options you pick from, which is what
+makes an under-specified answer visible rather than something the model has to guess past.
 
 **Temporal role determines topology.** This is the rule that turns knowledge into architecture, and it is
 domain-neutral:

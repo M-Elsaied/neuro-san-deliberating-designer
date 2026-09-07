@@ -34,7 +34,10 @@ The rest assert the properties the deliberation design claims but which nothing 
 Each is a property a plausible-looking prompt edit can silently break.
 """
 
+import ast
+import io
 import re
+import tokenize
 from pathlib import Path
 from typing import Any
 
@@ -241,6 +244,60 @@ def test_the_method_layer_names_no_domain(front_man, agents):
     assert not found, "domain vocabulary leaked into the method layer:\n  " + "\n  ".join(found)
 
 
+def test_no_domain_vocabulary_reaches_the_method_layers_executable_code():
+    """
+    The industry-agnostic claim, extended to the code that runs.
+
+    The test above covers the prompt and the tool descriptions, which is where a domain noun
+    changes what the MODEL does. It says nothing about the Python, which is where a domain noun
+    changes what the SOFTWARE does - a default naming one domain's tooling, a regex tuned to one
+    domain's phrasing, an option list with a fallback somebody hard-coded while debugging. That
+    class of leak is worse than a leaky prompt, because it survives every prompt rewrite and is
+    invisible to a reader of the registry.
+
+    Comments and docstrings are stripped first, deliberately. A worked example in a real domain is
+    how a docstring explains a format to a human, and banning it would trade a genuine
+    clarification for a rule. The prompt is the opposite case - a model reading a worked example
+    learns that domain's vocabulary and carries it elsewhere - which is why the two tests differ.
+    """
+    offenders: list[str] = []
+    for path in sorted(Path("coded_tools/agent_network_designer").glob("*.py")):
+        code: str = _executable_code(path)
+        offenders.extend(
+            f"{noun!r} in {path.name}"
+            for noun in DOMAIN_NOUNS
+            if re.search(rf"\b{re.escape(noun)}\b", code.lower()) is not None
+        )
+
+    assert not offenders, "domain vocabulary reached the method layer's code:\n  " + "\n  ".join(offenders)
+
+
+def _executable_code(path: Path) -> str:
+    """
+    Read a module with its comments and docstrings removed.
+
+    :param path: The module to read.
+    :return: Its source, minus everything that only documents it.
+    """
+    kept = [
+        token
+        for token in tokenize.generate_tokens(io.StringIO(path.read_text(encoding="utf-8")).readline)
+        if token.type != tokenize.COMMENT
+    ]
+    tree: ast.Module = ast.parse(tokenize.untokenize(kept))
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        first = node.body[0] if node.body else None
+        if (
+            isinstance(first, ast.Expr)
+            and isinstance(first.value, ast.Constant)
+            and isinstance(first.value.value, str)
+        ):
+            first.value.value = ""
+    return ast.unparse(tree)
+
+
 def test_the_shared_scoping_preamble_survived_the_hocon_concatenation(front_man):
     """
     ``"instructions": ${expertise_scoping_instructions} \"\"\"...\"\"\"`` is a concatenation.
@@ -277,6 +334,129 @@ def test_phase_b_prints_the_computed_table_and_writes_none_of_its_own(front_man)
     assert "VerifyStandards" in phase_b, "Phase B does not call the verifier"
     assert "| Standard | Owned by |" not in instructions, "a hand-written coverage table is back in the prompt"
     assert "Do NOT write the coverage table yourself" in phase_b
+
+
+def test_the_interview_is_driven_by_the_tool_rather_than_remembered(front_man):
+    """
+    The prompt's half of the fix a live session argued for, and the load-bearing part of it.
+
+    The designer offered its example answers as prose inside one sentence, the user replied with the
+    words two of those examples shared, and it recorded that and moved on - so the built network's
+    approval gate was chosen by the model and the user was never told a choice existed. Telling the
+    model to keep a better log would have been another instruction to drift from; InterviewLog
+    computes the questions, the answers and the position instead, and the prompt's job is now to
+    print what it returns. So what is asserted here is the handover, not the formatting.
+    """
+    instructions: str = collapse(str(front_man.get("instructions") or ""))
+    phase_a: str = instructions.split("PHASE B")[0]
+
+    assert "InterviewLog" in phase_a, "Phase A cannot reach the interview state"
+    assert 'print the "prompt" it returns VERBATIM' in phase_a
+    assert "You do NOT keep the answer log yourself" in phase_a
+    assert "never renumber the options, never re-word an option" in phase_a
+    assert "InterviewLog" in front_man.get("tools", []), "the front man is not wired to the tool"
+
+
+def test_the_tool_payload_is_never_shown_to_the_user(front_man):
+    """
+    Both faults a live run exposed, in one place.
+
+    The designer printed InterviewLog's entire JSON reply into the chat on one turn - status, log,
+    confirmed, braces and all - and on another it shortened the ambiguity re-ask to the two options
+    it judged relevant, which dropped "something else" and "I am not sure" and left a user whose
+    answer was not listed no honest reply. The tool returning finished text only helps if the text
+    is what gets printed.
+    """
+    phase_a: str = collapse(str(front_man.get("instructions") or "")).split("PHASE B")[0]
+
+    assert 'PRINT THE "prompt" STRING AND NOTHING ELSE FROM THE TOOL' in phase_a
+    assert "Do NOT print the tool's reply as JSON" in phase_a
+    assert 'Print "prompt" EXACTLY as given: every line, in order, unedited' in phase_a
+    assert 'removes "something else" and "I am not sure"' in phase_a
+
+
+def test_an_ambiguous_answer_may_not_be_settled_by_assuming(front_man):
+    """
+    The interview's whole claim is that it separates what you confirmed from what it assumed.
+
+    An answer consistent with several offered options, recorded as though it chose one, breaks that
+    claim in the worst available way: it lands under "Confirmed requirements" without the user
+    having confirmed it, which is the one place the brief promises never to guess. The tool decides
+    whether a reply was ambiguous, so the prompt's duty is to pass the words through unedited and
+    to obey the answer.
+    """
+    phase_a: str = collapse(str(front_man.get("instructions") or "")).split("PHASE B")[0]
+
+    assert 'reply: "<what they said, VERBATIM>"' in phase_a
+    assert "the assumption the tool exists to catch, and it cannot catch what it is not shown" in phase_a
+    assert "The variable is STILL OPEN" in phase_a
+    assert "do not name one of the candidates back as though it had been chosen" in phase_a
+
+
+def test_the_user_can_walk_back_to_any_earlier_answer(front_man):
+    """
+    An interview that only moves forward makes the first wrong answer unfixable except by starting
+    the session over. Going back has to be reachable from the prompt, passed to the tool in the
+    user's own words - the tool resolves a count, a label or a topic, and can only notice a count
+    and a topic disagreeing if it sees both - and it must never be read as a request to skip.
+    """
+    instructions: str = collapse(str(front_man.get("instructions") or ""))
+    phase_a: str = instructions.split("PHASE B")[0]
+
+    assert "CHANGE AN EARLIER ANSWER at any time before the build" in phase_a
+    assert 'action: "back", target: "<their words, VERBATIM>"' in phase_a
+    assert "There is no limit on how far back or how many times" in phase_a
+    assert "Going back to an earlier answer is NOT skipping and is never refused" in instructions
+
+
+def test_a_default_is_recorded_as_assumed_and_not_as_an_answer(front_man):
+    """
+    The one judgement the tool cannot make, and the flag that keeps it honest.
+
+    A default is a domain fact, so the model has to choose it - but recording it through the same
+    door as a real answer would make an assumption indistinguishable from a confirmation by the
+    time the brief is written, which is exactly what the brief promises to keep apart.
+    """
+    phase_a: str = collapse(str(front_man.get("instructions") or "")).split("PHASE B")[0]
+
+    assert "the tool cannot, because a default is a domain fact and it holds none" in phase_a
+    assert 'never record a default through action "answer" instead' in phase_a
+
+
+def test_a_domain_with_no_pack_still_gets_the_real_interview(front_man):
+    """
+    The generality claim, at the one place it was quietly untrue.
+
+    The three shipped packs are examples, not the product - a deployment's own domains will mostly
+    have no pack yet. Until this instruction existed, an unmatched domain fell back to the model
+    asking its own questions in prose, which lost the numbering, the ambiguity check and the answer
+    log together: the exact failure this work started from, for every use case outside the packs.
+    A pack should buy verified standards, not the ability to go back and fix a typo.
+    """
+    phase_a: str = collapse(str(front_man.get("instructions") or "")).split("PHASE B")[0]
+
+    assert "START THE INTERVIEW WITH THEM" in phase_a
+    assert 'InterviewLog (action: "start", questions:' in phase_a
+    assert "Do not hand-ask them yourself" in phase_a
+    # And the honesty guarantee that has to survive it.
+    assert '"curated" comes back false for such an interview and stays false' in phase_a
+
+
+def test_the_brief_takes_its_answers_from_the_log_not_from_memory(front_man):
+    """
+    The gap where the computed interview met a recalled document.
+
+    Holding the answers in a tool is worth nothing if the brief - the thing the user actually reads
+    and approves - is still composed from a recollection of the conversation. The failure it lets
+    through is the worst one available: an answer the user went back and corrected reaching the
+    brief with its old value, so going back appears to have worked while the mistake it was meant
+    to fix is what gets approved.
+    """
+    phase_a: str = collapse(str(front_man.get("instructions") or "")).split("PHASE B")[0]
+
+    assert "take the brief's two answer sections from InterviewLog, not from your memory" in phase_a
+    assert '"confirmed" is the list for "Confirmed requirements"' in phase_a
+    assert '"assumed" is the list for "Assumptions I made"' in phase_a
 
 
 def test_the_designer_is_told_to_discover_the_catalogue_before_matching(front_man):

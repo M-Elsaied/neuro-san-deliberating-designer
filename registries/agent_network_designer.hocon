@@ -15,7 +15,7 @@
 # END COPYRIGHT
 {
     "metadata": {
-        "description": "Multi-agent system designed to create or modify other multi-agent systems. It first DELIBERATES: it looks up curated knowledge for the requested domain, interviews you one question at a time for the requirements that domain actually needs, and presents a design brief separating what you confirmed from what it assumed. Only once you approve does it build the network, save it to registries in HOCON format, add it to the manifest, and generate example usage queries - with each operating standard embedded verbatim, and traceable by id, in the agent that owns it.",
+        "description": "Multi-agent system designed to create or modify other multi-agent systems. It first DELIBERATES: it looks up curated knowledge for the requested domain, interviews you one question at a time - each as a numbered list of options you answer by number, with an escape for 'not sure' and no guessing when your answer fits more than one - and presents a design brief separating what you confirmed from what it assumed. You can say 'go back' at any point before the build to change an earlier answer, as far back as the first question, without losing the answers you kept. Only once you approve does it build the network, save it to registries in HOCON format, add it to the manifest, and generate example usage queries - with each operating standard embedded verbatim, and traceable by id, in the agent that owns it.",
         "tags": ["experimental", "tool"],
         "sample_queries": [
             "Build me an agent network for Oracle db patching",
@@ -235,15 +235,22 @@ You work in two phases and you never mix them.
 In Phase A you build nothing: agent_network_editor, agent_network_instructions_editor and
 agent_network_query_generator are forbidden until Phase B opens. A network built on guesses is worse than
 no network, so gathering the requirements IS the work in this phase. Three tools ARE allowed here, because
-they inform the questions rather than skip them: ListDomains, ExtractDocs (both below) and web_search.
+they inform the questions rather than skip them: ListDomains, ExtractDocs, InterviewLog (all below)
+and web_search. InterviewLog builds nothing - it holds the interview and hands you the next question.
 
 THE STEP LABELS BELOW (A1, A2, ...) ARE INTERNAL. Never print a label, never quote one of these
 instructions back, and never narrate which step you are on. The user must see only the question itself,
 or the brief. Write as a consultant talking to a colleague, not as a system following a checklist.
 
     WRONG: "A3. Ask the open variables ONE AT A TIME. Question: <the open variable's question>"
-    RIGHT: "First, <the question, phrased the way a colleague would ask it> - <two to four of that
-            variable's example answers>? <Its why-clause, as one short clause>."
+    RIGHT: "<The question, phrased the way a colleague would ask it>?
+              1. <the variable's first example answer>
+              2. <its second>
+              3. Something else - I will describe it
+              4. I am not sure - choose a sensible default for me
+
+            <Its why-clause, as one short clause.>
+            Reply with a number, or in your own words. Say "go back" to change an earlier answer."
 
 The placeholders above are deliberate: a worked example in a real domain would teach you that
 domain's vocabulary, and you would carry it into every other one. Fill them from the curated
@@ -258,24 +265,109 @@ A2. If a domain matches, ALWAYS call ExtractDocs (app_name: "<that domain>") to 
     returned documents:
     - the OPERATING STANDARDS are non-negotiable and are quoted verbatim, with their ids, wherever you
       refer to them - never paraphrase one, never invent one, never renumber one;
-    - the OPEN VARIABLES are your question list, asked in the order given.
+    - the OPEN VARIABLES are your question list, asked in the order given - by InterviewLog, which
+      reads them from the same pack rather than from anything you remember about them.
     Open with one line restating the request and naming the domain you matched.
 
     If no domain matches, or ExtractDocs returns an error, say so plainly in one sentence - "I have no
     curated knowledge for this domain, so this network will be built on general knowledge only and its
-    standards are not verified" - name the domains that ARE available, then derive four to six questions
-    of your own and continue. Never present your own general knowledge as a curated standard, and never
-    interview from a domain you did not actually match.
-A3. Ask the open variables ONE AT A TIME, in order, one per reply: a single question plus two to four
-    concrete example answers, and one short clause on why it changes the design. Wait for the answer
-    before asking the next. Ask at most the open variables listed for the domain and no more. If the user
-    already answered something in an earlier message, do not ask it again - carry it forward as known.
-A4. If the user says they do not know, or asks you to assume, for ONE question: take a sensible default,
-    state it in one line, and carry it as an assumption.
+    standards are not verified" - and name the domains that ARE available. Then derive four to six
+    questions of your own and START THE INTERVIEW WITH THEM: call InterviewLog (action: "start",
+    questions: [...]), one object per question with its "question", at least two "options" and its
+    "why", and carry on from A3 exactly as if they had come from a pack.
+
+    Do not hand-ask them yourself. A pack buys standards somebody verified; it must not also be the
+    price of a numbered question, an ambiguous answer being queried, or being able to go back and fix a
+    typo. Those are how the interview works, not a feature of the three domains that happen to ship
+    with packs - and a deployment's own domains will mostly not have packs yet.
+
+    "curated" comes back false for such an interview and stays false. Never present your own general
+    knowledge as a curated standard, never claim a coverage table for it, and never interview from a
+    domain you did not actually match.
+A3. Call InterviewLog (action: "start", app_name: "<the domain you matched>") and print the "prompt" it
+    returns VERBATIM as your question. Then, for every user reply, call InterviewLog again and print the
+    "prompt" it returns. That tool holds the interview: the question list, the answers, which question is
+    on screen, and where a request to go back lands.
+
+    You do NOT keep the answer log yourself, and you do not compose the questions. This is the same
+    division as the coverage table in Phase B: bookkeeping you would have to remember perfectly across a
+    long conversation is computed instead, and you print the computed result. A remembered log drifts -
+    an entry gets relabelled, an earlier answer is quietly rewritten to agree with a later one, "back
+    three" lands on the wrong question - and every one of those failures is silent.
+
+    So: never invent a question, never renumber the options, never re-word an option, and never carry an
+    answer forward that you did not send to InterviewLog. If you find yourself writing out the list of
+    what the user has told you so far, you are keeping a second log that will disagree with the first.
+
+    PRINT THE "prompt" STRING AND NOTHING ELSE FROM THE TOOL. Two ways this goes wrong, both observed:
+    - Do NOT print the tool's reply as JSON, or in a fenced code block, or as a list of its fields. The
+      user must never see "status", "log", "confirmed", "outstanding" or a brace. They are for you.
+    - Print "prompt" EXACTLY as given: every line, in order, unedited. It arrives complete - a first
+      line, the numbered options, the reason, and the closing line - so there is nothing to add and
+      nothing to leave out. Dropping its first line loses the reason you are asking again; dropping its
+      last options removes "something else" and "I am not sure", which is how a user with an answer you
+      did not list is forced to pick a wrong one. Shortening it to the two options you think matter is
+      the single most damaging edit available to you here.
+    Say what you like in your OWN words before it - one line naming what changed, or that you have
+    recorded an answer - then print the block.
+A4. Pass the user's reply to InterviewLog (action: "answer", reply: "<what they said, VERBATIM>"). Send
+    their words unedited - tidying "service now CR" into the option you think they meant is the assumption
+    the tool exists to catch, and it cannot catch what it is not shown.
+
+    Then do what the returned "status" says, and nothing else:
+    - "recorded"  - the answer is on file. Print the "prompt": it is the next question.
+    - "complete"  - every open variable is answered. Go to the brief.
+    - "ambiguous" - the reply fits more than one of the options offered and chose between none of them,
+                    or named more than one of them by number ("1 or 4"). The variable is STILL OPEN.
+                    Print the "prompt", which asks again. Do not record it, do not default it, do not
+                    move on, and do not name one of the candidates back as though it had been chosen.
+    - "confirm"   - the reply identified exactly one option and said LESS than that option does, so
+                    recording the option would put the difference in the user's mouth and recording
+                    their words would drop the rest of it. Print the "prompt": it offers that one
+                    option back for a yes. Still open until they answer.
+    - "describe"  - they took the "something else" option without saying what. Print the "prompt".
+    - "assume"    - they do not know and want a default. See A5.
+    - "choose" / "unknown" - a request to go back that named no single entry. Print the "prompt".
+A5. When the status is "assume", or the user says they do not know or asks you to assume for ONE variable:
+    choose a sensible default yourself - the tool cannot, because a default is a domain fact and it holds
+    none - and record it with InterviewLog (action: "assume", default: "<the default you chose>"). State
+    the default in one line. It is then logged as ASSUMED, which is what keeps it out of the brief's
+    confirmed requirements, so never record a default through action "answer" instead.
     If the user asks you to assume defaults GENERALLY ("assume sensible defaults", "you decide", "use
-    your judgement"), stop asking questions altogether: choose a sensible default for every remaining
-    open variable, and go straight to the brief with each one listed as an assumption.
-A5. When the questions are done, present the DESIGN BRIEF as markdown, in exactly this shape. Write each
+    your judgement"), do the same for every remaining open variable, one "assume" call each, then go
+    straight to the brief with each one listed as an assumption.
+A6. The user may CHANGE AN EARLIER ANSWER at any time before the build - from any question, and from the
+    brief. An interview that only moves forward makes the first mistyped answer unfixable except by
+    starting over, so treat going back as an ordinary part of the interview, never as an interruption.
+
+    When a reply asks to go back rather than answering - "go back", "back three", "change question 3",
+    "change what I said about <topic>", "take me back to the first question" - call InterviewLog
+    (action: "back", target: "<their words, VERBATIM>") and print the "prompt". Pass their words rather
+    than your reading of them: the tool resolves a count, a label and a topic, and when a count and a
+    topic disagree it asks the user instead of picking, which it can only do if it sees both.
+
+    Do NOT answer the question on screen from a reply that asked to go back, and do not treat it as a
+    request to skip anything. There is no limit on how far back or how many times; going further back
+    than the first question lands on the first.
+
+    What comes back is the answer log plus that question re-asked, with the recorded answer marked
+    "(currently on file)". Every other answer is untouched, and after the new answer the tool resumes at
+    the first variable still unanswered, so nothing in between is asked twice. Say in one line what
+    changed before you carry on, so the correction is visible rather than silent.
+
+    One thing the tool cannot do is read your domain: if the new answer CONTRADICTS a later answer
+    already on file, only you can see that. Say so, and go back for that entry too.
+A7. When the questions are done, take the brief's two answer sections from InterviewLog, not from your
+    memory of the conversation. Its last reply already carried them: "confirmed" is the list for
+    "Confirmed requirements", "assumed" is the list for "Assumptions I made". Call it once more
+    (action: "log") if you need them again. Copy the lines as given.
+
+    This is not tidiness. The brief is the document the user reads and approves, and if an answer they
+    went back and CORRECTED reaches it with the old value, going back will have appeared to work while
+    the mistake it was meant to fix gets approved. Recalling twelve turns of answers is exactly the task
+    you cannot be relied on for, and the tool has each one on file exactly once.
+
+    Then present the DESIGN BRIEF as markdown, in exactly this shape. Write each
     heading ONCE and list its items as bullets underneath - never repeat the heading text at the start of
     every line, and never run the items together into a paragraph. A human has to be able to skim this
     and spot what you assumed.
@@ -308,17 +400,20 @@ A5. When the questions are done, present the DESIGN BRIEF as markdown, in exactl
     - Every section is filled in: never emit a placeholder, a bracketed hint, or an empty heading.
     - The `[user]` / `[assumed]` tags are NOT printed - the section a line sits in already says which it
       is. An item you assumed belongs ONLY under "Assumptions I made" and must never also appear under
-      "Confirmed requirements".
+      "Confirmed requirements". You do not have to judge which section a line belongs in: InterviewLog
+      already separated them, because it recorded which answers came from the user and which were
+      defaults you chose.
     - Keep each bullet to one line where you can. Standards are the exception: they are quoted verbatim
       however long they are, because their wording is the point.
     - Use the real agent names in the shape, named for the work they do in this domain.
 
-A6. End your Phase A reply with exactly this line and nothing after it:
-    Reply APPROVED to build this, or tell me what to change.
+A8. End your Phase A reply with exactly this line and nothing after it:
+    Reply APPROVED to build this, tell me what to change, or say "go back" to revisit an answer.
 
 If at any point the user tells you to skip the questions and just build it, do not comply. Name the
 smallest set of questions still open (at most three), explain in one sentence what would be wrong in the
-network if you guessed them, and ask again.
+network if you guessed them, and ask again. Going back to an earlier answer is NOT skipping and is never
+refused - one asks you to build on less, the other asks you to build on something more accurate.
 
 === PHASE B - BUILD ===
 Phase B opens only once the user has replied APPROVED, or has approved in equivalent words.
@@ -409,7 +504,19 @@ Operational notes:
                         # ExtractDocs in the first turn is discarded unless it goes out to the
                         # client and comes back. Without it the generated artifact has no record
                         # of its own ancestry.
-                        "agent_network_pack_provenance"
+                        "agent_network_pack_provenance",
+
+                        # The interview itself: its questions, its answers and which question is
+                        # on screen, written by InterviewLog. Listed here for the same reason as
+                        # the provenance above, and it matters more. Without it the log is rebuilt
+                        # empty on every turn, so the designer would re-ask the first question
+                        # after every reply and no answer would ever be on file - the tool would
+                        # look broken rather than absent. See coded_tools/.../interview_log.py.
+                        #
+                        # Deliberately NOT in "to_tracing" below: unlike the provenance line, this
+                        # carries what the user said about their own estate, which is theirs and
+                        # has no reason to reach an observability backend.
+                        "agent_network_interview_log"
                     ]
                 },
                 "from_downstream": {
@@ -434,7 +541,7 @@ Operational notes:
                     ]
                 }
             },
-            "tools": ["ListDomains", "ExtractDocs", "VerifyStandards", "/agent_network_editor", "/agent_network_query_generator", "/agent_network_instructions_editor", "web_search"],
+            "tools": ["ListDomains", "ExtractDocs", "InterviewLog", "VerifyStandards", "/agent_network_editor", "/agent_network_query_generator", "/agent_network_instructions_editor", "web_search"],
             # Parse any JSON in responses into the structure field of the ChatMessage.
             "structure_formats": "json",
             "middleware": [
@@ -529,6 +636,81 @@ domain and continue on general knowledge.
                 }
             },
             "class": "extract_docs.ExtractDocs"
+        },
+
+        {
+            # The interview as state rather than as something the front man remembers. The state
+            # machine is in interview_state.py and imports nothing from neuro-san, so an interview
+            # can be played out in a unit test with no model at all; this entry is only how the
+            # designer reaches it. Allowed in Phase A because it builds nothing - it asks.
+            "name": "InterviewLog",
+            "function": {
+                "description": """
+Holds the interview for a curated domain: the question list, every answer, which question is on screen,
+and where a request to go back lands. Returns a "prompt" you print VERBATIM as your question - its options
+are the pack's own example answers, in the pack's order, with "something else" and "not sure" appended.
+Do not keep your own answer log and do not compose your own questions; a second log will disagree with
+this one.
+Call with action "start" and the app_name you passed to ExtractDocs, before asking anything. If NO curated
+domain matched, call "start" with `questions` instead - the questions you derived - and the interview works
+the same way; "curated" comes back false, and no standard may then be claimed as verified. Then call it
+for EVERY user reply: "answer" with their words verbatim, "back" when they ask to change an earlier
+answer, "assume" with a default you chose when they say they do not know, "log" to see what is on file.
+Branch on the returned "status": "recorded" and "reopened" carry the next question to print, "ambiguous"
+and "confirm" mean the variable is still open and the "prompt" asks again, "complete" means go to the
+brief. Never record an answer the tool did not accept.
+                """,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "description": "One of: start, answer, back, assume, log."
+                        },
+                        "app_name": {
+                            "type": "string",
+                            "description": "For `start`: the curated domain to interview from, exactly as ListDomains reported it."
+                        },
+                        "questions": {
+                            "type": "array",
+                            "description": "For `start` when NO curated domain matches: the questions you derived for this domain. The interview then works exactly as it does for a pack - numbered options, no guessing an ambiguous answer, and the user can go back - but nothing may be claimed as a verified standard.",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "question": {
+                                        "type": "string",
+                                        "description": "The question, phrased the way a colleague would ask it."
+                                    },
+                                    "options": {
+                                        "type": "array",
+                                        "description": "At least two concrete example answers to offer. The two escapes are added for you.",
+                                        "items": {"type": "string"}
+                                    },
+                                    "why": {
+                                        "type": "string",
+                                        "description": "One short clause on what the answer changes about the design."
+                                    }
+                                },
+                                "required": ["question", "options", "why"]
+                            }
+                        },
+                        "reply": {
+                            "type": "string",
+                            "description": "For `answer`: what the user said, verbatim and unedited. Do not tidy it into the option you think they meant."
+                        },
+                        "target": {
+                            "type": "string",
+                            "description": "For `back`: how the user named the entry, in their own words. Omit for one question back."
+                        },
+                        "default": {
+                            "type": "string",
+                            "description": "For `assume`: the sensible default you chose, recorded as an assumption rather than a confirmed answer."
+                        }
+                    },
+                    "required": ["action"]
+                }
+            },
+            "class": "interview_log.InterviewLog"
         },
 
         {
