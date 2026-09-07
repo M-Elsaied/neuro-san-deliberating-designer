@@ -59,6 +59,13 @@ from dataclasses import dataclass
 from dataclasses import replace
 from typing import Any
 
+from coded_tools.agent_network_designer.interview_options import DESCRIBE_ESCAPE
+from coded_tools.agent_network_designer.interview_options import OPTION_PICK_RE
+from coded_tools.agent_network_designer.interview_options import UNSURE_ESCAPE
+from coded_tools.agent_network_designer.interview_options import names_only_numbers
+from coded_tools.agent_network_designer.interview_options import option_key
+from coded_tools.agent_network_designer.interview_options import sole_match
+from coded_tools.agent_network_designer.interview_options import tied_options
 from coded_tools.agent_network_designer.knowledge_pack import KnowledgePack
 
 # sly_data key holding the interview. Must also be declared in the front man's
@@ -67,29 +74,6 @@ from coded_tools.agent_network_designer.knowledge_pack import KnowledgePack
 # client and comes back. The whole point of this module is state that outlives a turn, so that
 # declaration is not optional bookkeeping - without it there is no log at all.
 INTERVIEW_LOG: str = "agent_network_interview_log"
-
-# One offered option as rendered and as parsed: "  1. <text>". The number opens the line, because
-# an option the user can answer by number is the whole point - a digit buried in a sentence is
-# prose again. Shared with interview_review so what is rendered here is what is recognised there.
-OPTION_RE: re.Pattern = re.compile(r"^[ \t]*\d{1,2}[.)][ \t]+(?P<text>\S[^\n]*)$", re.MULTILINE)
-
-# How the user names an option instead of retyping it: "2", "option 2", "#2", "2 and 3".
-OPTION_PICK_RE: re.Pattern = re.compile(r"(?:^|\b)(?:option[ \t]*|#)?(\d{1,2})\b")
-
-# The two escapes appended to every question, in this order, after the pack's own examples.
-# Without them a numbered list narrows the answer to whatever got enumerated, and a user whose
-# situation is not listed has no honest reply - the numbering would have made guessing tidier
-# rather than rarer.
-DESCRIBE_ESCAPE: str = "Something else - I will describe it"
-UNSURE_ESCAPE: str = "I am not sure - choose a sensible default for me"
-
-# Recognising an escape in text that has already been rendered, for the checker and for a reply
-# that quotes one back instead of naming its number.
-ESCAPE_MARKERS: tuple[str, ...] = ("not sure", "something else", "you decide", "sensible default", "don't know")
-
-# The fewest options that make a choice: at least one real answer plus the two escapes.
-MIN_OPTIONS: int = 3
-
 # "back two", "back 2". Words as well as digits, because users type both.
 BACK_DISTANCE_RE: re.Pattern = re.compile(
     r"\bback\s+(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten)\b", re.IGNORECASE
@@ -206,66 +190,6 @@ CHOOSE: str = "choose"
 UNKNOWN: str = "unknown"
 
 
-def option_key(text: str) -> str:
-    """
-    Reduce an answer or an option to comparable characters only.
-
-    Letters and digits, lowercased, everything else dropped - so "service now CR" and "ServiceNow
-    CR" are one key. That matters here specifically: the shortenings a user actually types differ
-    from the curated wording in spacing and punctuation far more often than in words, and a
-    comparison that missed those would miss the case this exists for.
-
-    :param text: Any fragment.
-    :return: The comparison key.
-    """
-    return re.sub(r"[^a-z0-9]+", "", text.lower())
-
-
-def is_escape(option: str) -> bool:
-    """
-    :param option: One offered option.
-    :return: True when the option is an escape rather than a candidate answer.
-    """
-    lowered: str = option.lower()
-    return any(marker in lowered for marker in ESCAPE_MARKERS)
-
-
-def tied_options(reply: str, options: list[str] | tuple[str, ...]) -> list[str]:
-    """
-    Find the options a reply is consistent with but does not choose between.
-
-    The test is deliberately narrow: the reply's key must be a PROPER substring of the option's key
-    - the reply says less than the option, and everything it does say the option also says. A
-    shortening naming only the part several options share settles nothing. An answer that matches
-    nothing on offer is the user describing something else in their own words, which is a complete
-    answer and not this function's business.
-
-    Narrow on purpose. A broader notion of ambiguity needs judgement, and a check that fires on
-    ordinary answers is one a reader learns to wave through.
-
-    :param reply: What the user said.
-    :param options: The options that were offered.
-    :return: The tied options, or an empty list when the reply settles the question.
-    """
-    key: str = option_key(reply)
-    if not key:
-        return []
-    tied: list[str] = [
-        option
-        for option in options
-        if not is_escape(option) and key != option_key(option) and key in option_key(option)
-    ]
-    return tied if len(tied) > 1 else []
-
-
-def offered_options(text: str) -> list[str]:
-    """
-    :param text: Rendered question text.
-    :return: The text of each numbered option it offers, in order.
-    """
-    return [match.group("text").strip() for match in OPTION_RE.finditer(text)]
-
-
 @dataclass(frozen=True)
 class Entry:
     """
@@ -312,6 +236,11 @@ class Outcome:
     entry: Entry | None = None
     candidates: tuple[str, ...] = ()
     note: str = ""
+    # The option list the prompt DISPLAYED, when it is not the entry's own. A narrowed re-ask
+    # renumbers from 1, so the next reply's "1" means the first thing on screen and not the first
+    # option in the pack. Carrying it here is what lets the state remember that. Empty means the
+    # entry's own options were shown.
+    shown: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -333,6 +262,12 @@ class InterviewState:
     # is what may be CLAIMED about the result, and the brief has to keep saying "standards are not
     # verified" for the whole session, not only in the sentence that opened it.
     curated: bool = True
+    # What is on screen right now, when a re-ask narrowed the list. A number in the next reply is
+    # resolved against THIS, not against the entry's options: a live run offered a single narrowed
+    # option, the user typed "1", and it recorded the pack's first option instead. The ambiguity
+    # re-ask had the same fault and was right only by coincidence - its two candidates happened to
+    # be the pack's first two, in order. Empty means the entry's own options are on screen.
+    offered: tuple[str, ...] = ()
 
     # ----------------------------------------------------------------------------------
     # Reading the state
@@ -342,6 +277,14 @@ class InterviewState:
     def current(self) -> Entry:
         """:return: The entry on screen."""
         return self.entries[self.cursor]
+
+    @property
+    def on_screen(self) -> tuple[str, ...]:
+        """
+        :return: The options the user is looking at - the narrowed list if a re-ask narrowed it,
+            otherwise the entry's own.
+        """
+        return self.offered or self.current.options
 
     @property
     def visible(self) -> tuple[Entry, ...]:
@@ -421,7 +364,7 @@ class InterviewState:
         :return: The question, ready to print verbatim.
         """
         entry: Entry = self.current
-        candidates: tuple[str, ...] = options if options is not None else entry.options
+        candidates: tuple[str, ...] = options if options is not None else self.on_screen
         lines: list[str] = [lead] if lead else []
         # A lead that already asks something IS the question - printing the original underneath it
         # asks twice in one reply, which is the shape the one-question-at-a-time check reads as two.
@@ -464,12 +407,14 @@ class InterviewState:
         """
         entry: Entry = self.current
         text: str = reply.strip()
-        numbered: list[str] = self._picked_numbers(text, entry)
-        picked: str | None = numbered[0] if numbered else self._pick(text, entry)
+        numbered: list[str] = self._picked_numbers(text)
+        picked: str | None = numbered[0] if numbered else self._pick(text)
 
         held: Outcome | None = self._unsettled(text, entry, numbered, picked)
         if held is not None:
-            return self, held
+            # A narrowed re-ask renumbers from 1, so the state has to carry the narrowed list into
+            # the next turn or the reply's "1" is read against the pack's list instead.
+            return replace(self, offered=held.shown), held
         if picked == DESCRIBE_ESCAPE:
             return self, Outcome(
                 status=DESCRIBE,
@@ -520,7 +465,7 @@ class InterviewState:
         if picked is not None:
             return None
 
-        tied: list[str] = tied_options(text, entry.options)
+        tied: list[str] = tied_options(text, self.on_screen)
         if tied:
             return Outcome(
                 status=AMBIGUOUS,
@@ -531,8 +476,9 @@ class InterviewState:
                 entry=entry,
                 candidates=tuple(tied),
                 note=entry.why,
+                shown=tuple(tied),
             )
-        sole: str | None = _sole_match(text, entry.options)
+        sole: str | None = sole_match(text, self.on_screen)
         if sole is not None:
             return Outcome(
                 status=CONFIRM,
@@ -543,6 +489,7 @@ class InterviewState:
                 entry=entry,
                 candidates=(sole,),
                 note=entry.why,
+                shown=(sole,),
             )
         return None
 
@@ -560,15 +507,19 @@ class InterviewState:
         """
         return self._store(default.strip(), assumed=True)
 
-    def _picked_numbers(self, text: str, entry: Entry) -> list[str]:
+    def _picked_numbers(self, text: str) -> list[str]:
         """
         Every option the reply names by number, de-duplicated and in the order offered.
 
+        Resolved against what is ON SCREEN rather than the entry's own list, because a narrowed
+        re-ask renumbers from 1 and the user is reading that.
+
         :param text: The reply.
-        :param entry: The entry on screen.
         :return: The options named, which may be none, one, or several.
         """
-        shown: list[str] = list(entry.options) + [DESCRIBE_ESCAPE, UNSURE_ESCAPE]
+        if not names_only_numbers(text):
+            return []
+        shown: list[str] = list(self.on_screen) + [DESCRIBE_ESCAPE, UNSURE_ESCAPE]
         seen: list[str] = []
         for match in OPTION_PICK_RE.finditer(text):
             number: int = int(match.group(1))
@@ -576,19 +527,17 @@ class InterviewState:
                 seen.append(shown[number - 1])
         return seen
 
-    def _pick(self, text: str, entry: Entry) -> str | None:
+    def _pick(self, text: str) -> str | None:
         """
-        Resolve a reply that names an option, by number or by quoting it back exactly.
+        Resolve a reply that quotes an option back word for word.
+
+        Numbers are not handled here - _picked_numbers owns them, and a second resolver would be
+        one more place for the screen-versus-pack confusion to come back.
 
         :param text: The reply.
-        :param entry: The entry on screen.
         :return: The option's exact text, or None when the reply names no option.
         """
-        shown: list[str] = list(entry.options) + [DESCRIBE_ESCAPE, UNSURE_ESCAPE]
-        for match in OPTION_PICK_RE.finditer(text):
-            number: int = int(match.group(1))
-            if 1 <= number <= len(shown):
-                return shown[number - 1]
+        shown: list[str] = list(self.on_screen) + [DESCRIBE_ESCAPE, UNSURE_ESCAPE]
         key: str = option_key(text)
         for option in shown:
             if key and key == option_key(option):
@@ -609,7 +558,7 @@ class InterviewState:
         """
         entries: list[Entry] = list(self.entries)
         entries[self.cursor] = replace(entries[self.cursor], answer=answer, assumed=assumed)
-        moved: InterviewState = replace(self, entries=tuple(entries))
+        moved: InterviewState = replace(self, entries=tuple(entries), offered=())
 
         outstanding: tuple[Entry, ...] = moved.outstanding
         if not outstanding:
@@ -650,7 +599,7 @@ class InterviewState:
         if outcome is not None:
             return self, outcome
 
-        moved: InterviewState = replace(self, cursor=index)
+        moved: InterviewState = replace(self, cursor=index, offered=())
         note: str = ""
         if index == 0 and self.cursor > 1 and _distance(target) is not None:
             note = "That is further back than the first question, so this is the first one."
@@ -782,29 +731,6 @@ class InterviewState:
         )
 
 
-def _sole_match(reply: str, options: tuple[str, ...]) -> str | None:
-    """
-    The one option a reply identifies, when it identifies exactly one.
-
-    Same containment test as tied_options, and deliberately so: the two are the branches of one
-    question - how many of the offered options is this reply consistent with? More than one and it
-    settles nothing; exactly one and it has chosen, in fewer words than the pack uses.
-
-    :param reply: What the user said.
-    :param options: The options that were offered.
-    :return: That option's curated text, or None when the reply matches none of them.
-    """
-    key: str = option_key(reply)
-    if not key:
-        return None
-    matched: list[str] = [
-        option
-        for option in options
-        if not is_escape(option) and key != option_key(option) and key in option_key(option)
-    ]
-    return matched[0] if len(matched) == 1 else None
-
-
 def _subject_words(text: str) -> list[str]:
     """
     The words in a request that name what it is about, rather than how to get there.
@@ -922,6 +848,7 @@ def to_dict(state: InterviewState) -> dict[str, Any]:
         "domain_id": state.domain_id,
         "cursor": state.cursor,
         "curated": state.curated,
+        "offered": list(state.offered),
         "entries": [
             {
                 "label": entry.label,
@@ -976,4 +903,5 @@ def from_dict(raw: Any) -> InterviewState:
         # Defaults to True only when absent entirely; an uncurated interview must never come back
         # from a round trip looking curated, because that is a claim about verification.
         curated=bool(raw.get("curated", True)),
+        offered=tuple(str(one) for one in raw.get("offered", ())),
     )

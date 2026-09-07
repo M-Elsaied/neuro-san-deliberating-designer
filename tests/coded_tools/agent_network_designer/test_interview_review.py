@@ -31,6 +31,8 @@ from pathlib import Path
 
 import pytest
 
+from coded_tools.agent_network_designer.interview_options import offered_options
+from coded_tools.agent_network_designer.interview_options import tied_options
 from coded_tools.agent_network_designer.interview_review import InterviewResult
 from coded_tools.agent_network_designer.interview_review import Turn
 from coded_tools.agent_network_designer.interview_review import load_transcript
@@ -39,8 +41,6 @@ from coded_tools.agent_network_designer.interview_review import render_report
 from coded_tools.agent_network_designer.interview_review import review_interview
 from coded_tools.agent_network_designer.interview_state import InterviewState
 from coded_tools.agent_network_designer.interview_state import begin
-from coded_tools.agent_network_designer.interview_state import offered_options
-from coded_tools.agent_network_designer.interview_state import tied_options
 from coded_tools.agent_network_designer.knowledge_pack import KnowledgePack
 from coded_tools.agent_network_designer.pack_catalogue import load_catalogue
 from coded_tools.agent_network_designer.pack_catalogue import load_pack

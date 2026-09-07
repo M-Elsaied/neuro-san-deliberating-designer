@@ -70,12 +70,12 @@ from dataclasses import field
 from pathlib import Path
 from typing import Any
 
-from coded_tools.agent_network_designer.interview_state import ESCAPE_MARKERS
-from coded_tools.agent_network_designer.interview_state import MIN_OPTIONS
-from coded_tools.agent_network_designer.interview_state import OPTION_PICK_RE
-from coded_tools.agent_network_designer.interview_state import offered_options
-from coded_tools.agent_network_designer.interview_state import option_key
-from coded_tools.agent_network_designer.interview_state import tied_options
+from coded_tools.agent_network_designer.interview_options import ESCAPE_MARKERS
+from coded_tools.agent_network_designer.interview_options import MIN_OPTIONS
+from coded_tools.agent_network_designer.interview_options import OPTION_PICK_RE
+from coded_tools.agent_network_designer.interview_options import offered_options
+from coded_tools.agent_network_designer.interview_options import option_key
+from coded_tools.agent_network_designer.interview_options import tied_options
 from coded_tools.agent_network_designer.knowledge_pack import KnowledgePack
 from coded_tools.agent_network_designer.knowledge_pack import normalise
 

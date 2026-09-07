@@ -28,24 +28,24 @@ which is exactly how the CodedTool drives it.
 
 import pytest
 
+from coded_tools.agent_network_designer.interview_options import DESCRIBE_ESCAPE
+from coded_tools.agent_network_designer.interview_options import MIN_OPTIONS
+from coded_tools.agent_network_designer.interview_options import UNSURE_ESCAPE
+from coded_tools.agent_network_designer.interview_options import offered_options
 from coded_tools.agent_network_designer.interview_state import AMBIGUOUS
 from coded_tools.agent_network_designer.interview_state import ASSUME
 from coded_tools.agent_network_designer.interview_state import CHOOSE
 from coded_tools.agent_network_designer.interview_state import COMPLETE
 from coded_tools.agent_network_designer.interview_state import CONFIRM
 from coded_tools.agent_network_designer.interview_state import DESCRIBE
-from coded_tools.agent_network_designer.interview_state import DESCRIBE_ESCAPE
-from coded_tools.agent_network_designer.interview_state import MIN_OPTIONS
 from coded_tools.agent_network_designer.interview_state import RECORDED
 from coded_tools.agent_network_designer.interview_state import REOPENED
 from coded_tools.agent_network_designer.interview_state import UNKNOWN
-from coded_tools.agent_network_designer.interview_state import UNSURE_ESCAPE
 from coded_tools.agent_network_designer.interview_state import Entry
 from coded_tools.agent_network_designer.interview_state import InterviewState
 from coded_tools.agent_network_designer.interview_state import begin
 from coded_tools.agent_network_designer.interview_state import begin_from_questions
 from coded_tools.agent_network_designer.interview_state import from_dict
-from coded_tools.agent_network_designer.interview_state import offered_options
 from coded_tools.agent_network_designer.interview_state import to_dict
 from coded_tools.agent_network_designer.knowledge_pack import KnowledgePack
 from coded_tools.agent_network_designer.knowledge_pack import OpenVariable
@@ -791,3 +791,132 @@ def test_the_live_session_that_found_these_now_holds_every_answer_open(pack):
     assert "verified restore required" in every, "the confirmed answer was lost"
     assert any("assumed" not in line and "4 hours" in line for line in assumed), assumed
     assert not any("4 hours" in line for line in confirmed), "an assumed window reached the confirmed list"
+
+
+# --------------------------------------------------------------------------------------
+# A narrowed re-ask renumbers, so a number must mean what is on screen
+# --------------------------------------------------------------------------------------
+
+
+def test_a_number_answers_the_narrowed_list_not_the_packs(pack):
+    """
+    A live run offered one narrowed option, the user typed "1", and it recorded the pack's first.
+
+    The re-ask renumbers from 1 - it has to, the user is reading a list that starts at 1 - so the
+    reply has to be resolved against the list that was displayed. Nothing remembered which list
+    that was, so numbers went to the pack's order regardless of what the screen said. The ambiguity
+    re-ask had the identical fault and looked correct only by coincidence: its two candidates
+    happened to be the pack's first two options, in the pack's order.
+    """
+    state: InterviewState = begin(pack)
+    held, outcome = state.record("Exadata")
+    assert outcome.status == CONFIRM
+    assert outcome.shown == ("Exadata X8M",)
+
+    after, recorded = held.record("1")
+    assert recorded.status == RECORDED
+    assert after.entries[0].answer == "Exadata X8M", "the number was read against the wrong list"
+
+
+def test_a_number_answers_a_narrowed_ambiguity_list(pack):
+    """
+    The same fault on the ambiguity path, with a tied pair that is not the pack's first two.
+    """
+    state: InterviewState = play(begin(pack), "1", "1", "1", "1")
+    held, narrowed = state.record("service now CR")
+    assert narrowed.status == AMBIGUOUS
+    assert len(narrowed.shown) == 2
+
+    after, _ = held.record("2")
+    assert after.entries[4].answer == narrowed.shown[1]
+
+
+def test_the_narrowed_list_survives_the_turn_it_is_answered_on(pack):
+    """
+    The reply to a re-ask arrives on the NEXT turn, so the narrowing has to cross sly_data.
+
+    Without this the fix works in a unit test and fails in the product, which is the one shape of
+    bug this module was written to stop having.
+    """
+    state: InterviewState = begin(pack)
+    held, _ = state.record("Exadata")
+    carried: InterviewState = from_dict(to_dict(held))
+
+    assert carried.on_screen == ("Exadata X8M",)
+    after, _ = carried.record("1")
+    assert after.entries[0].answer == "Exadata X8M"
+
+
+def test_moving_on_puts_the_full_option_list_back(pack):
+    """
+    The narrowing is for one question only. Carrying it forward would offer the next question a
+    list belonging to the previous one.
+    """
+    state: InterviewState = begin(pack)
+    held, _ = state.record("Exadata")
+    after, _ = held.record("1")
+
+    assert not after.offered
+    assert after.on_screen == after.current.options
+    assert offered_options(after.render())[:-2] == list(after.current.options)
+
+
+def test_going_back_puts_the_full_option_list_back(pack):
+    """
+    Same, for a correction: the reopened question shows its own options, not the last narrowing.
+
+    A user who goes back from a narrowed re-ask is abandoning that narrowing, and would otherwise
+    arrive at an earlier question showing a later question's shortlist.
+    """
+    state: InterviewState = play(begin(pack), "1", "1")
+    held, held_outcome = state.record("4 hours")
+    assert held_outcome.status == CONFIRM, "expected the narrowing this test is about"
+
+    reopened, outcome = held.go_back("Q1")
+
+    assert not reopened.offered
+    assert outcome.status == REOPENED
+    # The recorded answer carries a "(currently on file)" marker, so compare on the option text.
+    shown: list[str] = [one.removesuffix(" (currently on file)") for one in offered_options(outcome.prompt)]
+    assert shown[:-2] == list(reopened.current.options)
+
+
+@pytest.mark.parametrize(
+    ("reply", "expected"),
+    [
+        # Naming option numbers.
+        ("1", RECORDED),
+        ("2", RECORDED),
+        ("option 2", RECORDED),
+        ("#3", RECORDED),
+        ("1 or 3", AMBIGUOUS),
+        # Answering in words that happen to contain a number. "4 hours" was read as option 4 in a
+        # live interview, which silently took the describe escape on the user's behalf - and an
+        # interview about windows, versions and counts is full of answers like these.
+        ("4 hours", CONFIRM),
+        ("8 hours, full outage acceptable", RECORDED),
+        ("about 40 databases over 3 waves", RECORDED),
+    ],
+)
+def test_digits_in_an_answer_are_not_an_option_number(reply, expected, pack):
+    """
+    A reply is choosing options only when it is digits and connectives and nothing else.
+
+    A real answer mentioning a number is far commoner than a numbered pick dressed up in prose, so
+    the digits only win when almost nothing else is there.
+    """
+    state: InterviewState = play(begin(pack), "1", "1")
+    _, outcome = state.record(reply)
+
+    assert outcome.status == expected, f"{reply!r} was read as {outcome.status}"
+
+
+def test_an_answer_containing_a_number_is_stored_as_written(pack):
+    """
+    And it reaches the log as the user's own words, not as whichever option that digit indexed.
+    """
+    state: InterviewState = play(begin(pack), "1")
+    after, outcome = state.record("about 40 databases, 3 waves")
+
+    assert outcome.status == RECORDED
+    assert after.entries[1].answer == "about 40 databases, 3 waves"
