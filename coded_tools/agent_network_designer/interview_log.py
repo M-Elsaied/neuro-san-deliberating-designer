@@ -95,8 +95,8 @@ class InterviewLog(CodedTool):
         :return:
             If successful:
                 A dictionary with the keys:
-                - "status" (str): what to do next - "recorded", "ambiguous", "describe",
-                  "assume", "complete", "reopened", "choose" or "unknown".
+                - "status" (str): what to do next - "recorded", "ambiguous", "confirm",
+                  "describe", "assume", "complete", "reopened", "choose" or "unknown".
                 - "prompt" (str): the text to print verbatim, when there is something to ask.
                 - "label" (str): the entry the status refers to.
                 - "log" (list): the answer log, one line per entry asked so far.

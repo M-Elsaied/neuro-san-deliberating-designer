@@ -148,6 +148,13 @@ NAVIGATION_WORDS: frozenset[str] = frozenset(
         "nope",
         "okay",
         "oops",
+        "option",
+        "options",
+        "prior",
+        "before",
+        "above",
+        "step",
+        "recent",
         "please",
         "previous",
         "question",
@@ -190,6 +197,7 @@ BARE_NUMBER_RE: re.Pattern = re.compile(r"^\D*(\d{1,2})\D*$")
 # Outcome statuses. The model branches on these, so they are named for what it must do next.
 RECORDED: str = "recorded"
 AMBIGUOUS: str = "ambiguous"
+CONFIRM: str = "confirm"
 DESCRIBE: str = "describe"
 ASSUME: str = "assume"
 COMPLETE: str = "complete"
@@ -456,41 +464,87 @@ class InterviewState:
         """
         entry: Entry = self.current
         text: str = reply.strip()
-        if not text:
-            return self, Outcome(status=AMBIGUOUS, prompt=self.render(), entry=entry, note="nothing was said")
+        numbered: list[str] = self._picked_numbers(text, entry)
+        picked: str | None = numbered[0] if numbered else self._pick(text, entry)
 
-        picked: str | None = self._pick(text, entry)
+        held: Outcome | None = self._unsettled(text, entry, numbered, picked)
+        if held is not None:
+            return self, held
         if picked == DESCRIBE_ESCAPE:
             return self, Outcome(
                 status=DESCRIBE,
-                prompt=self.render(lead="Go ahead - describe it in your own words and I will record that."),
+                # Phrased as a question so render() does not print the original underneath it. The
+                # live run showed the pair, and a restated question above its own option list reads
+                # as though the list were still the thing to answer.
+                prompt=self.render(lead="Go ahead - what is it, in your own words?"),
                 entry=entry,
             )
         if picked == UNSURE_ESCAPE:
             return self, Outcome(status=ASSUME, entry=entry, note=entry.why)
-
-        if picked is None:
-            tied: list[str] = tied_options(text, entry.options)
-            if tied:
-                return self, Outcome(
-                    status=AMBIGUOUS,
-                    prompt=self.render(
-                        options=tuple(tied),
-                        lead="Both of those match what you said, and they build different networks - which is it?",
-                    ),
-                    entry=entry,
-                    candidates=tuple(tied),
-                    note=entry.why,
-                )
-            # A shortening that fits exactly ONE option has identified it, so record the curated
-            # wording rather than the shorthand. "approved by CAB" names one option and no other, and
-            # storing it as typed drops the system the option named - so the brief would read
-            # "Approval: approved by CAB", and the agent built from it would enforce a gate whose
-            # change record nobody wrote down. Two or more matches is the branch above; one is an
-            # answer, and the pack already has the words for it.
-            picked = _sole_match(text, entry.options)
-
         return self._store(picked or text, assumed=False)
+
+    def _unsettled(self, text: str, entry: Entry, numbered: list[str], picked: str | None) -> Outcome | None:
+        """
+        Decide whether a reply has actually settled the question, and hold it open if not.
+
+        Three ways a reply can fail to settle one, all of them found in a real session and all of
+        them previously resolved by taking the likeliest reading:
+
+          * it names more than one option - "1 or 4" is the user weighing two aloud, and the reply
+            says outright that the choice is still open;
+          * it is consistent with several options and chooses between none, which is the failure
+            this whole feature was built for;
+          * it identifies exactly one option and says LESS than that option does. Recording the
+            option puts the difference in the user's mouth - "DBA team" against an option reading
+            "DBA team, verified restore required" put a verified restore under "what you told me" -
+            and recording their words instead drops the part of the option nobody disputed, so an
+            option naming a change record becomes an approval with no record in it. Neither is
+            honest, so the option goes back for one confirmation.
+
+        :param text: The reply, stripped.
+        :param entry: The entry on screen.
+        :param numbered: The options the reply named by number.
+        :param picked: The single option it resolved to, if any.
+        :return: The outcome to return instead of recording, or None when the reply is an answer.
+        """
+        if not text:
+            return Outcome(status=AMBIGUOUS, prompt=self.render(), entry=entry, note="nothing was said")
+        if len(numbered) > 1:
+            return Outcome(
+                status=AMBIGUOUS,
+                prompt=self.render(lead="You named more than one of those - which one is it?"),
+                entry=entry,
+                candidates=tuple(numbered),
+                note=entry.why,
+            )
+        if picked is not None:
+            return None
+
+        tied: list[str] = tied_options(text, entry.options)
+        if tied:
+            return Outcome(
+                status=AMBIGUOUS,
+                prompt=self.render(
+                    options=tuple(tied),
+                    lead="Both of those match what you said, and they build different networks - which is it?",
+                ),
+                entry=entry,
+                candidates=tuple(tied),
+                note=entry.why,
+            )
+        sole: str | None = _sole_match(text, entry.options)
+        if sole is not None:
+            return Outcome(
+                status=CONFIRM,
+                prompt=self.render(
+                    options=(sole,),
+                    lead="That matches one option, and it says a little more than you did - is this right?",
+                ),
+                entry=entry,
+                candidates=(sole,),
+                note=entry.why,
+            )
+        return None
 
     def assume(self, default: str) -> tuple["InterviewState", Outcome]:
         """
@@ -505,6 +559,22 @@ class InterviewState:
         :return: The new state, and what the caller must do next.
         """
         return self._store(default.strip(), assumed=True)
+
+    def _picked_numbers(self, text: str, entry: Entry) -> list[str]:
+        """
+        Every option the reply names by number, de-duplicated and in the order offered.
+
+        :param text: The reply.
+        :param entry: The entry on screen.
+        :return: The options named, which may be none, one, or several.
+        """
+        shown: list[str] = list(entry.options) + [DESCRIBE_ESCAPE, UNSURE_ESCAPE]
+        seen: list[str] = []
+        for match in OPTION_PICK_RE.finditer(text):
+            number: int = int(match.group(1))
+            if 1 <= number <= len(shown) and shown[number - 1] not in seen:
+                seen.append(shown[number - 1])
+        return seen
 
     def _pick(self, text: str, entry: Entry) -> str | None:
         """

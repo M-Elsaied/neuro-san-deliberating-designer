@@ -317,10 +317,14 @@ A4. Pass the user's reply to InterviewLog (action: "answer", reply: "<what they 
     Then do what the returned "status" says, and nothing else:
     - "recorded"  - the answer is on file. Print the "prompt": it is the next question.
     - "complete"  - every open variable is answered. Go to the brief.
-    - "ambiguous" - the reply fits more than one of the options offered and chose between none of them.
-                    The variable is STILL OPEN. Print the "prompt", which asks again with only the
-                    options it could have meant. Do not record it, do not default it, do not move on,
-                    and do not name one of the candidates back as though it had been chosen.
+    - "ambiguous" - the reply fits more than one of the options offered and chose between none of them,
+                    or named more than one of them by number ("1 or 4"). The variable is STILL OPEN.
+                    Print the "prompt", which asks again. Do not record it, do not default it, do not
+                    move on, and do not name one of the candidates back as though it had been chosen.
+    - "confirm"   - the reply identified exactly one option and said LESS than that option does, so
+                    recording the option would put the difference in the user's mouth and recording
+                    their words would drop the rest of it. Print the "prompt": it offers that one
+                    option back for a yes. Still open until they answer.
     - "describe"  - they took the "something else" option without saying what. Print the "prompt".
     - "assume"    - they do not know and want a default. See A5.
     - "choose" / "unknown" - a request to go back that named no single entry. Print the "prompt".
@@ -653,7 +657,8 @@ the same way; "curated" comes back false, and no standard may then be claimed as
 for EVERY user reply: "answer" with their words verbatim, "back" when they ask to change an earlier
 answer, "assume" with a default you chose when they say they do not know, "log" to see what is on file.
 Branch on the returned "status": "recorded" and "reopened" carry the next question to print, "ambiguous"
-means the reply fits several options and the variable is still open, "complete" means go to the brief.
+and "confirm" mean the variable is still open and the "prompt" asks again, "complete" means go to the
+brief. Never record an answer the tool did not accept.
                 """,
                 "parameters": {
                     "type": "object",

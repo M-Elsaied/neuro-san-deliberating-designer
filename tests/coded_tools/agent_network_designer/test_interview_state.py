@@ -32,6 +32,7 @@ from coded_tools.agent_network_designer.interview_state import AMBIGUOUS
 from coded_tools.agent_network_designer.interview_state import ASSUME
 from coded_tools.agent_network_designer.interview_state import CHOOSE
 from coded_tools.agent_network_designer.interview_state import COMPLETE
+from coded_tools.agent_network_designer.interview_state import CONFIRM
 from coded_tools.agent_network_designer.interview_state import DESCRIBE
 from coded_tools.agent_network_designer.interview_state import DESCRIBE_ESCAPE
 from coded_tools.agent_network_designer.interview_state import MIN_OPTIONS
@@ -294,23 +295,78 @@ def test_the_narrowed_re_ask_asks_once(pack):
     assert outcome.prompt.count("?") == 1, outcome.prompt
 
 
-def test_a_shortening_that_fits_one_option_records_the_packs_wording(pack):
+def test_a_shortening_that_fits_one_option_is_confirmed_not_completed(pack):
     """
-    The other half of the ambiguity rule, and a real one: a live run recorded "approved by CAB".
+    A live session recorded "DBA team" as "DBA team, verified restore required".
 
-    That names exactly one offered option and no other, so it is an answer - but stored as typed it
-    drops the system the option named, and the brief then reads "Approval: approved by CAB". The
-    agent built from that would enforce a gate whose change record nobody wrote down. One match is
-    a choice; the pack already has the words for it.
+    That option bundles two facts - who takes the backup, and whether a verified restore is
+    required before the window opens - and the user answered one of them. Adopting the option's
+    full wording put the verified restore under "Confirmed requirements _(what you told me)_",
+    which the user had not told it. An earlier version of this code did exactly that, on the
+    reasoning that one match is a choice; one match identifies WHICH option, which is not the same
+    as agreeing to everything the option says.
+
+    Storing the shorthand instead is no better. It drops the part of the option nobody disputed, so
+    an option naming a change record becomes an approval with no record in it - the complaint that
+    motivated the bad fix in the first place.
+
+    So neither: the option goes back for a yes, and the variable stays open until it gets one.
     """
-    state: InterviewState = play(begin(pack), "1", "1", "1", "1")
-    full: str = "ServiceNow CR approved by CAB"
-    assert full in state.current.options, "fixture drifted from the pack"
+    state: InterviewState = play(begin(pack), "1", "1", "1")
+    bundled: str = "DBA team, verified restore required"
+    assert bundled in state.current.options, "fixture drifted from the pack"
 
-    after, outcome = state.record("approved by CAB")
+    after, outcome = state.record("DBA team")
+
+    assert outcome.status == CONFIRM
+    assert outcome.candidates == (bundled,)
+    assert not after.current.answered, "a partial answer was recorded as a full one"
+    assert after.current.label == state.current.label
+    assert offered_options(outcome.prompt)[0] == bundled
+    # The escapes survive, so confirming is not the only way out of it.
+    assert UNSURE_ESCAPE in offered_options(outcome.prompt)
+
+
+def test_confirming_the_offered_option_records_the_packs_wording(pack):
+    """
+    And once confirmed, what lands on file is the curated wording rather than the shorthand.
+    """
+    state: InterviewState = play(begin(pack), "1", "1", "1")
+    held, _ = state.record("DBA team")
+    after, outcome = held.record("1")
 
     assert outcome.status == RECORDED
-    assert after.entries[4].answer == full, "the shorthand was stored instead of the curated wording"
+    assert after.entries[3].answer == "DBA team, verified restore required"
+    assert not after.entries[3].assumed
+
+
+def test_naming_two_options_by_number_settles_nothing(pack):
+    """
+    A live session answered "1 or 4" and the first was taken silently.
+
+    The reply says in as many words that the choice is still open, so resolving it to the lower
+    number is a worse version of the failure this feature exists for - there is not even an
+    inference to make.
+    """
+    state: InterviewState = play(begin(pack), "1", "1", "1", "1")
+    after, outcome = state.record("1 or 4")
+
+    assert outcome.status == AMBIGUOUS
+    assert len(outcome.candidates) == 2
+    assert not after.current.answered
+    assert after.current.label == state.current.label
+
+
+@pytest.mark.parametrize("reply", ["1", "option 1", "#1", " 1 "])
+def test_one_option_named_once_is_still_a_choice(reply, pack):
+    """
+    The guard above must not break answering by number, including the same number twice.
+    """
+    state: InterviewState = begin(pack)
+    after, outcome = state.record(reply)
+
+    assert outcome.status == RECORDED
+    assert after.entries[0].answer == pack.open_variables[0].examples.split(";")[0].strip()
 
 
 def test_an_answer_in_the_users_own_words_is_recorded_as_given(pack):
@@ -450,6 +506,12 @@ def test_an_entry_can_be_named_by_its_topic(pack):
         # Positional, and a distance past the start.
         ("start again from the beginning", "Q1"),
         ("back 20", "Q1"),
+        # From a live session, which answered "I could not tell which answer you mean". Every word
+        # in it is navigation vocabulary, and "option" was not on the list - so the one surviving
+        # word named nothing and a plainly-meant request looked unintelligible.
+        ("go back to previous option", "Q6"),
+        ("back to the previous one", "Q6"),
+        ("go back a step", "Q6"),
     ],
 )
 def test_every_phrasing_the_prompt_promises_is_honoured(target, expected, pack):
@@ -678,3 +740,54 @@ def test_the_subject_falls_back_to_the_whole_question(pack):  # pylint: disable=
     entry: Entry = Entry(label="Q1", variable_id="V1", question="Which one is it?", options=(), why="")
 
     assert entry.subject == "Which one is it"
+
+
+def test_the_live_session_that_found_these_now_holds_every_answer_open(pack):
+    """
+    The reported session, replayed as one regression.
+
+    A real interview in the UI produced three answers the user never gave. Replaying the exact
+    replies is worth more than the three unit tests above put together, because the faults only
+    lined up in sequence: a partial answer completed at Q4, a two-number reply resolved at Q5, and
+    a correction request rejected at Q7 - after which the brief listed two "confirmed requirements"
+    the user had not confirmed.
+    """
+    state: InterviewState = begin(pack)
+    for reply in ("3", "3"):
+        state, outcome = state.record(reply)
+        assert outcome.status == RECORDED
+
+    # Q3: took the describe escape, then the not-sure escape, and the default was flagged assumed.
+    state, outcome = state.record("4")
+    assert outcome.status == DESCRIBE
+    assert outcome.prompt.count("?") == 1, "the describe re-ask printed the question twice"
+    state, outcome = state.record("5")
+    assert outcome.status == ASSUME
+    state, _ = state.assume("4 hours, rolling required")
+    assert state.entries[2].assumed
+
+    # Q4: a partial answer must not be completed into the option it resembles.
+    state, outcome = state.record("DBA team")
+    assert outcome.status == CONFIRM
+    state, outcome = state.record("1")
+    assert outcome.status == RECORDED
+
+    # Q5: neither shortening settles it, and "1 or 4" settles it least of all.
+    for reply in ("Service Now", "ServiceNow CR", "1 or 4"):
+        state, outcome = state.record(reply)
+        assert outcome.status == AMBIGUOUS, f"{reply!r} was accepted as an answer"
+        assert not state.current.answered
+    state, outcome = state.record("1")
+    assert outcome.status == RECORDED
+
+    state, _ = state.record("3")
+
+    # Q7: the correction request that was rejected as unintelligible.
+    state, outcome = state.go_back("go back to previous option")
+    assert outcome.status == REOPENED
+
+    confirmed, assumed = state.brief_lines()
+    every: str = " ".join(confirmed)
+    assert "verified restore required" in every, "the confirmed answer was lost"
+    assert any("assumed" not in line and "4 hours" in line for line in assumed), assumed
+    assert not any("4 hours" in line for line in confirmed), "an assumed window reached the confirmed list"
