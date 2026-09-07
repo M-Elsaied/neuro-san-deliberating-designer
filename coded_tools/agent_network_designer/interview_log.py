@@ -40,6 +40,8 @@ from typing import Any
 
 from neuro_san.interfaces.coded_tool import CodedTool
 
+from coded_tools.agent_network_designer.interview_matcher import Matcher
+from coded_tools.agent_network_designer.interview_matcher import build_matcher
 from coded_tools.agent_network_designer.interview_state import ASSUME
 from coded_tools.agent_network_designer.interview_state import INTERVIEW_LOG
 from coded_tools.agent_network_designer.interview_state import InterviewState
@@ -72,6 +74,14 @@ class InterviewLog(CodedTool):
     labels are assigned once, the answers are stored as written, and where a request to go back
     lands is computed rather than judged.
     """
+
+    def __init__(self, matcher: Matcher | None = None) -> None:
+        """
+        :param matcher: Reads a free-text reply against the options on screen. Defaults to whatever
+            this deployment is configured for - containment when no match model is named. Injected
+            in tests so the offline suite never reaches a provider.
+        """
+        self.matcher: Matcher = matcher or build_matcher()
 
     def invoke(self, args: dict[str, Any], sly_data: dict[str, Any]) -> dict[str, Any] | str:
         """
@@ -148,7 +158,10 @@ class InterviewLog(CodedTool):
             reply: str = str(args.get("reply") or "")
             if not reply.strip():
                 return "Error: No reply given to record. Pass what the user said as 'reply'."
-            state, outcome = state.record(reply)
+            # The matcher is reached from HERE and nowhere else. The front man cannot route around
+            # it, cannot pass its own reading of the reply, and cannot skip the policy that follows:
+            # it hands over what the user said, and gets back what to print.
+            state, outcome = state.record(reply, matcher=self.matcher)
         elif action == ASSUME:
             default: str = str(args.get("default") or "")
             if not default.strip():

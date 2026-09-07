@@ -87,32 +87,60 @@ def is_escape(option: str) -> bool:
     return any(marker in lowered for marker in ESCAPE_MARKERS)
 
 
+def consistent_options(reply: str, options: list[str] | tuple[str, ...]) -> list[str]:
+    """
+    The offered options a reply is consistent with. One question, asked once.
+
+    The whole of matching reduces to this count, and the two callers that used to own it were the
+    same computation with different length branches: "more than one" meant settle nothing, "exactly
+    one" meant it had chosen in fewer words than the pack uses. Keeping them apart meant the
+    containment rule was written twice, and a change to one would not reach the other.
+
+    The rule is deliberately narrow: the reply's key must be a PROPER substring of the option's key,
+    so the reply says less than the option and everything it does say the option also says. An
+    answer matching nothing on offer is the user describing something else in their own words, which
+    is a complete answer and not this function's business.
+
+    Narrow on purpose. A broader notion needs judgement, and a check that fires on ordinary answers
+    is one a reader learns to wave through. Where judgement IS wanted, a matcher supplies it - see
+    interview_matcher - and this stays the fallback that needs no model.
+
+    :param reply: What the user said.
+    :param options: The options that were offered.
+    :return: The options it could have meant, in the order offered.
+    """
+    key: str = option_key(reply)
+    if not key:
+        return []
+    return [
+        option
+        for option in options
+        if not is_escape(option) and key != option_key(option) and key in option_key(option)
+    ]
+
+
 def tied_options(reply: str, options: list[str] | tuple[str, ...]) -> list[str]:
     """
-    Find the options a reply is consistent with but does not choose between.
-
-    The test is deliberately narrow: the reply's key must be a PROPER substring of the option's key
-    - the reply says less than the option, and everything it does say the option also says. A
-    shortening naming only the part several options share settles nothing. An answer that matches
-    nothing on offer is the user describing something else in their own words, which is a complete
-    answer and not this function's business.
-
-    Narrow on purpose. A broader notion of ambiguity needs judgement, and a check that fires on
-    ordinary answers is one a reader learns to wave through.
+    The options a reply is consistent with but does not choose between.
 
     :param reply: What the user said.
     :param options: The options that were offered.
     :return: The tied options, or an empty list when the reply settles the question.
     """
-    key: str = option_key(reply)
-    if not key:
-        return []
-    tied: list[str] = [
-        option
-        for option in options
-        if not is_escape(option) and key != option_key(option) and key in option_key(option)
-    ]
-    return tied if len(tied) > 1 else []
+    consistent: list[str] = consistent_options(reply, options)
+    return consistent if len(consistent) > 1 else []
+
+
+def sole_match(reply: str, options: list[str] | tuple[str, ...]) -> str | None:
+    """
+    The one option a reply identifies, when it identifies exactly one.
+
+    :param reply: What the user said.
+    :param options: The options that were offered.
+    :return: That option's curated text, or None when it identifies none or several.
+    """
+    consistent: list[str] = consistent_options(reply, options)
+    return consistent[0] if len(consistent) == 1 else None
 
 
 def offered_options(text: str) -> list[str]:
@@ -138,26 +166,3 @@ def names_only_numbers(text: str) -> bool:
     if not any(word.isdigit() for word in words):
         return False
     return all(word.isdigit() or word in PICK_FILLER for word in words)
-
-
-def sole_match(reply: str, options: tuple[str, ...]) -> str | None:
-    """
-    The one option a reply identifies, when it identifies exactly one.
-
-    Same containment test as tied_options, and deliberately so: the two are the branches of one
-    question - how many of the offered options is this reply consistent with? More than one and it
-    settles nothing; exactly one and it has chosen, in fewer words than the pack uses.
-
-    :param reply: What the user said.
-    :param options: The options that were offered.
-    :return: That option's curated text, or None when the reply matches none of them.
-    """
-    key: str = option_key(reply)
-    if not key:
-        return None
-    matched: list[str] = [
-        option
-        for option in options
-        if not is_escape(option) and key != option_key(option) and key in option_key(option)
-    ]
-    return matched[0] if len(matched) == 1 else None

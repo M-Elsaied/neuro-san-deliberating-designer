@@ -59,13 +59,13 @@ from dataclasses import dataclass
 from dataclasses import replace
 from typing import Any
 
+from coded_tools.agent_network_designer.interview_matcher import DeterministicMatcher
+from coded_tools.agent_network_designer.interview_matcher import Matcher
 from coded_tools.agent_network_designer.interview_options import DESCRIBE_ESCAPE
 from coded_tools.agent_network_designer.interview_options import OPTION_PICK_RE
 from coded_tools.agent_network_designer.interview_options import UNSURE_ESCAPE
 from coded_tools.agent_network_designer.interview_options import names_only_numbers
 from coded_tools.agent_network_designer.interview_options import option_key
-from coded_tools.agent_network_designer.interview_options import sole_match
-from coded_tools.agent_network_designer.interview_options import tied_options
 from coded_tools.agent_network_designer.knowledge_pack import KnowledgePack
 
 # sly_data key holding the interview. Must also be declared in the front man's
@@ -386,7 +386,7 @@ class InterviewState:
     # Recording an answer
     # ----------------------------------------------------------------------------------
 
-    def record(self, reply: str) -> tuple["InterviewState", Outcome]:
+    def record(self, reply: str, matcher: Matcher | None = None) -> tuple["InterviewState", Outcome]:
         """
         Resolve a reply against the entry on screen and record it if it settles the question.
 
@@ -407,10 +407,11 @@ class InterviewState:
         """
         entry: Entry = self.current
         text: str = reply.strip()
+        # Deterministic first: a number or an exact quote is unambiguous and costs no matcher call.
         numbered: list[str] = self._picked_numbers(text)
         picked: str | None = numbered[0] if numbered else self._pick(text)
 
-        held: Outcome | None = self._unsettled(text, entry, numbered, picked)
+        held: Outcome | None = self._unsettled(text, entry, numbered, picked, matcher or DeterministicMatcher())
         if held is not None:
             # A narrowed re-ask renumbers from 1, so the state has to carry the narrowed list into
             # the next turn or the reply's "1" is read against the pack's list instead.
@@ -428,7 +429,9 @@ class InterviewState:
             return self, Outcome(status=ASSUME, entry=entry, note=entry.why)
         return self._store(picked or text, assumed=False)
 
-    def _unsettled(self, text: str, entry: Entry, numbered: list[str], picked: str | None) -> Outcome | None:
+    def _unsettled(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+        self, text: str, entry: Entry, numbered: list[str], picked: str | None, matcher: Matcher
+    ) -> Outcome | None:
         """
         Decide whether a reply has actually settled the question, and hold it open if not.
 
@@ -450,6 +453,7 @@ class InterviewState:
         :param entry: The entry on screen.
         :param numbered: The options the reply named by number.
         :param picked: The single option it resolved to, if any.
+        :param matcher: Supplies the candidates for a free-text reply. It proposes; this decides.
         :return: The outcome to return instead of recording, or None when the reply is an answer.
         """
         if not text:
@@ -465,7 +469,12 @@ class InterviewState:
         if picked is not None:
             return None
 
-        tied: list[str] = tied_options(text, self.on_screen)
+        # One question - how many of the options on screen is this reply consistent with? - and
+        # the answer decides everything downstream. Two or more and nothing is settled; exactly one
+        # and the option may still say more than the user did; none and they answered in their own
+        # words. The matcher supplies the count; this decides what it means.
+        consistent: list[str] = matcher.match(text, self.on_screen)
+        tied: list[str] = consistent if len(consistent) > 1 else []
         if tied:
             return Outcome(
                 status=AMBIGUOUS,
@@ -478,7 +487,7 @@ class InterviewState:
                 note=entry.why,
                 shown=tuple(tied),
             )
-        sole: str | None = sole_match(text, self.on_screen)
+        sole: str | None = consistent[0] if len(consistent) == 1 else None
         if sole is not None:
             return Outcome(
                 status=CONFIRM,

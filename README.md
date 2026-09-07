@@ -50,6 +50,12 @@ Ports already taken? `ns run --nsflow-port 4174 --server-http-port 8081`.
   back are how the interview works rather than a privilege of the three shipped packs. A pack buys
   *verified standards* - it is not the price of being able to fix a typo. An interview with no pack behind
   it reports `curated: false` for its whole life and may never claim a verified standard.
+- **Replies are read, not pattern-matched.** Set `AGENT_NETWORK_DESIGNER_MATCH_MODEL` and a model
+  reads your reply against the options - so *the CAB one*, *the second one* and *the one with a
+  standby* all land correctly, where substring matching found nothing. It only ever proposes
+  candidates: whether that settles the question is still decided in code, so an answer consistent
+  with two options is still queried and a partial answer is still confirmed. Unset, everything falls
+  back to plain containment with no model, no key and no network.
 - **The interview is state, not memory.** The question list, every answer and the current position live in
   the `InterviewLog` coded tool, not in the model's context. So the options are the pack's own wording by
   construction, entry labels never shift, and `back three` lands three back - none of which survives being
