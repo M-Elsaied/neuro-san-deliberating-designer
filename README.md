@@ -68,7 +68,8 @@ Ports already taken? `ns run --nsflow-port 4174 --server-http-port 8081`.
 - **It ends with a design brief** that separates confirmed requirements from flagged assumptions.
 - **Standards stay traceable, and the trace is checked.** Each one appears in its owning agent as
   `MUST: <text> [<id>]`, and the closing coverage table is *computed* by `VerifyStandards` rather than
-  written by the model about its own work. See [knowledge packs](docs/knowledge_packs.md).
+  written by the model about its own work. See [knowledge packs](docs/knowledge_packs.md) and
+  [the deliberation interview](docs/deliberation_interview.md).
 
 | Domain | `app_name` | Standard ids |
 |---|---|---|
