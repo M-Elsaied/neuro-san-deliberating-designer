@@ -320,6 +320,11 @@ class InterviewState:
     domain_id: str
     entries: tuple[Entry, ...]
     cursor: int = 0
+    # Whether the questions came from a curated pack. False means the designer derived them for a
+    # domain this deployment has no pack for. The machinery is identical either way - what differs
+    # is what may be CLAIMED about the result, and the brief has to keep saying "standards are not
+    # verified" for the whole session, not only in the sentence that opened it.
+    curated: bool = True
 
     # ----------------------------------------------------------------------------------
     # Reading the state
@@ -788,6 +793,56 @@ def begin(pack: KnowledgePack) -> InterviewState:
     return InterviewState(domain_id=pack.domain_id, entries=entries)
 
 
+def begin_from_questions(domain_id: str, questions: list[dict[str, Any]]) -> InterviewState:
+    """
+    Build the interview from questions the designer derived, for a domain with no pack.
+
+    The whole point of a method layer holding no domain facts is that it works for a domain nobody
+    has written a pack for yet - and until this existed, it did not. An unmatched domain fell back
+    to the model composing its own questions in prose, which is where both the numbering and the
+    answer log were lost: exactly the failure mode that started this work, reappearing for every
+    use case outside the three shipped packs. A pack buys VERIFIED standards. It should not also be
+    the price of being able to go back and fix a typo.
+
+    So the entries are built the same way and behave identically. curated=False is the only
+    difference, and it exists to stop a derived interview being described as a curated one.
+
+    :param domain_id: What the designer is calling this domain.
+    :param questions: One entry per question: "question" (required), "options" (the example answers
+        to offer, at least two) and "why" (one clause on what the answer changes).
+    :return: The interview at its first question.
+    :raises ValueError: If the questions are unusable, naming which one and why.
+    """
+    if not questions:
+        raise ValueError("no questions were given, so there is no interview to hold")
+    entries: list[Entry] = []
+    for number, item in enumerate(questions, start=1):
+        if not isinstance(item, dict):
+            raise ValueError(f"question {number} is not an object with 'question', 'options' and 'why'")
+        text: str = str(item.get("question") or "").strip()
+        options: tuple[str, ...] = tuple(str(one).strip() for one in item.get("options") or () if str(one).strip())
+        if not text:
+            raise ValueError(f"question {number} has no question text")
+        if len(options) < 2:
+            # Fewer than two and there is nothing to choose between, so the reply comes back as
+            # prose and nothing can tell whether it settled anything - which is the failure the
+            # numbering exists to prevent, reintroduced through the back door.
+            raise ValueError(
+                f"question {number} offers {len(options)} example answers; give at least two so the "
+                f"user has something to choose between"
+            )
+        entries.append(
+            Entry(
+                label=f"Q{number}",
+                variable_id=f"D{number}",
+                question=text,
+                options=options,
+                why=str(item.get("why") or "").strip(),
+            )
+        )
+    return InterviewState(domain_id=domain_id, entries=tuple(entries), curated=False)
+
+
 def to_dict(state: InterviewState) -> dict[str, Any]:
     """
     :param state: The interview.
@@ -796,6 +851,7 @@ def to_dict(state: InterviewState) -> dict[str, Any]:
     return {
         "domain_id": state.domain_id,
         "cursor": state.cursor,
+        "curated": state.curated,
         "entries": [
             {
                 "label": entry.label,
@@ -843,4 +899,11 @@ def from_dict(raw: Any) -> InterviewState:
     cursor: int = int(raw.get("cursor", 0))
     if not 0 <= cursor < len(entries):
         raise ValueError(f"the interview log points at entry {cursor} of {len(entries)}")
-    return InterviewState(domain_id=str(raw.get("domain_id", "")), entries=entries, cursor=cursor)
+    return InterviewState(
+        domain_id=str(raw.get("domain_id", "")),
+        entries=entries,
+        cursor=cursor,
+        # Defaults to True only when absent entirely; an uncurated interview must never come back
+        # from a round trip looking curated, because that is a claim about verification.
+        curated=bool(raw.get("curated", True)),
+    )

@@ -26,6 +26,7 @@ No language model: the tools are invoked directly with the args and sly_data the
 """
 
 import asyncio
+import json
 from typing import Any
 
 import pytest
@@ -441,3 +442,59 @@ def test_interview_log_async_invoke_matches_invoke():
     assert started["label"] == "Q1"
     assert answered["status"] == "recorded"
     assert answered["log"][0].startswith("Q1.")
+
+
+def test_interview_log_holds_an_interview_for_a_domain_with_no_pack():
+    """
+    Through the interface the designer calls, for a domain this deployment has no pack for.
+
+    Accepts the questions as JSON text as well as a list, because a model passes an array as a
+    string about as often as it passes a real one, and failing on that would push the designer back
+    to asking in prose - which is the behaviour with none of this in it.
+    """
+    questions: list[dict[str, Any]] = [
+        {"question": "How do orders arrive?", "options": ["phone", "web app"], "why": "sets the intake."},
+        {"question": "Who delivers?", "options": ["own riders", "couriers"], "why": "sets dispatch."},
+    ]
+    result, sly_data = drive({"action": "start", "app_name": "pizza_delivery", "questions": json.dumps(questions)})
+
+    assert result["curated"] is False, "a derived interview must not report itself as curated"
+    assert result["label"] == "Q1"
+    assert "1. phone" in result["prompt"]
+    assert INTERVIEW_LOG in sly_data
+
+    # And it stays uncurated across a turn, so a long session cannot forget and start claiming
+    # verified standards for questions the designer made up.
+    tool = InterviewLog()
+    assert tool.invoke({"action": "answer", "reply": "1"}, sly_data)["curated"] is False
+    assert tool.invoke({"action": "back", "target": "go back"}, sly_data)["curated"] is False
+
+
+@pytest.mark.parametrize(
+    ("call", "fragment"),
+    [
+        ({"action": "start", "questions": "{not json"}, "not valid JSON"),
+        ({"action": "start", "questions": {"question": "x"}}, "must be a list"),
+        ({"action": "start", "questions": [{"question": "x", "options": ["a"]}]}, "at least two"),
+    ],
+)
+def test_interview_log_reports_unusable_derived_questions(call, fragment):
+    """
+    The model writes these, so they arrive malformed. The error names what to fix.
+    """
+    outcome: Any = InterviewLog().invoke(call, {})
+
+    assert isinstance(outcome, str)
+    assert fragment in outcome
+
+
+def test_interview_log_needs_either_a_domain_or_questions():
+    """
+    Neither is a usage error, and the message has to name both routes - otherwise the designer
+    learns only that app_name exists and an unmatched domain has no way in.
+    """
+    outcome: Any = InterviewLog().invoke({"action": "start"}, {})
+
+    assert isinstance(outcome, str)
+    assert "no questions to ask" in outcome
+    assert "questions for one this deployment has no pack for" in outcome

@@ -45,6 +45,11 @@ Ports already taken? `ns run --nsflow-port 4174 --server-http-port 8081`.
 - **You can go back.** Say *go back* at any point before the build - `back three`, `change question 3`, or
   just name what you got wrong - as far as the first question and as often as you need. Only the answer you
   change is re-asked; everything else keeps its value and the interview resumes where it left off.
+- **Any domain, packed or not.** With a pack the questions are the pack's own; without one the designer
+  derives them and starts the same interview with them, so numbered options, ambiguity checks and going
+  back are how the interview works rather than a privilege of the three shipped packs. A pack buys
+  *verified standards* - it is not the price of being able to fix a typo. An interview with no pack behind
+  it reports `curated: false` for its whole life and may never claim a verified standard.
 - **The interview is state, not memory.** The question list, every answer and the current position live in
   the `InterviewLog` coded tool, not in the model's context. So the options are the pack's own wording by
   construction, entry labels never shift, and `back three` lands three back - none of which survives being

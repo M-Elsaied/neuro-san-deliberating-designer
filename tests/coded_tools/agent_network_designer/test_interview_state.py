@@ -33,18 +33,23 @@ from coded_tools.agent_network_designer.interview_state import ASSUME
 from coded_tools.agent_network_designer.interview_state import CHOOSE
 from coded_tools.agent_network_designer.interview_state import COMPLETE
 from coded_tools.agent_network_designer.interview_state import DESCRIBE
+from coded_tools.agent_network_designer.interview_state import DESCRIBE_ESCAPE
+from coded_tools.agent_network_designer.interview_state import MIN_OPTIONS
 from coded_tools.agent_network_designer.interview_state import RECORDED
 from coded_tools.agent_network_designer.interview_state import REOPENED
 from coded_tools.agent_network_designer.interview_state import UNKNOWN
+from coded_tools.agent_network_designer.interview_state import UNSURE_ESCAPE
 from coded_tools.agent_network_designer.interview_state import Entry
 from coded_tools.agent_network_designer.interview_state import InterviewState
 from coded_tools.agent_network_designer.interview_state import begin
+from coded_tools.agent_network_designer.interview_state import begin_from_questions
 from coded_tools.agent_network_designer.interview_state import from_dict
 from coded_tools.agent_network_designer.interview_state import offered_options
 from coded_tools.agent_network_designer.interview_state import to_dict
 from coded_tools.agent_network_designer.knowledge_pack import KnowledgePack
 from coded_tools.agent_network_designer.knowledge_pack import OpenVariable
 from coded_tools.agent_network_designer.knowledge_pack import PackManifest
+from coded_tools.agent_network_designer.pack_catalogue import load_catalogue
 from coded_tools.agent_network_designer.pack_catalogue import load_pack
 
 DOMAIN: str = "oracle_database_patching"
@@ -129,6 +134,116 @@ def test_a_pack_with_no_open_variables_is_refused(pack):  # pylint: disable=unus
     """
     with pytest.raises(ValueError, match="no open variables"):
         begin(synthetic(count=0))
+
+
+@pytest.mark.parametrize("pack_id", sorted(pack.domain_id for pack in load_catalogue()))
+def test_the_interview_works_for_every_shipped_pack(pack_id):
+    """
+    The industry-agnostic claim, held for the interview and not only for the prompt.
+
+    A test suite written against one domain proves the machinery works for that domain. These packs
+    differ in the ways that would break a renderer quietly - two example answers in one, five in
+    another, questions with and without a colon in them - so parametrising is what turns "it works
+    for Oracle" into "it reads whatever the pack declares".
+    """
+    state: InterviewState = begin(load_pack(pack_id))
+
+    assert len(state.entries) > 0
+    assert [entry.label for entry in state.entries] == [f"Q{n}" for n in range(1, len(state.entries) + 1)]
+    for _ in state.entries:
+        rendered: str = state.render()
+        offered: list[str] = offered_options(rendered)
+        assert len(offered) >= MIN_OPTIONS, f"{pack_id} rendered {len(offered)} options"
+        assert rendered.count("?") == 1, f"{pack_id} asked {rendered.count('?')} questions at once"
+        assert offered[-2:] == [DESCRIBE_ESCAPE, UNSURE_ESCAPE]
+        state, _ = state.record("1")
+    assert not state.outstanding
+
+
+# --------------------------------------------------------------------------------------
+# A domain with no pack: the same interview, without the verified standards
+# --------------------------------------------------------------------------------------
+
+
+DERIVED: list[dict] = [
+    {"question": "Order intake: how do orders arrive?", "options": ["phone", "web app"], "why": "sets the intake."},
+    {"question": "Fleet: who delivers?", "options": ["own riders", "couriers"], "why": "sets dispatch."},
+    {"question": "Payment: when is it taken?", "options": ["on order", "on delivery"], "why": "sets the gate."},
+]
+
+
+def test_a_domain_with_no_pack_gets_the_same_interview():
+    """
+    The generality the whole design claims, which until now stopped at the packs.
+
+    An unmatched domain fell back to the model composing questions in prose - losing the numbering,
+    the ambiguity check and the answer log together. That is the failure this work started from,
+    reappearing for every use case outside the three shipped packs, which is most of them. A pack
+    buys standards somebody verified. It should not also be the price of a numbered question.
+    """
+    state: InterviewState = begin_from_questions("pizza_delivery", DERIVED)
+    offered: list[str] = offered_options(state.render())
+
+    assert offered == ["phone", "web app", DESCRIBE_ESCAPE, UNSURE_ESCAPE]
+    assert [entry.label for entry in state.entries] == ["Q1", "Q2", "Q3"]
+    assert not state.curated, "a derived interview must never look curated"
+
+
+def test_going_back_works_without_a_pack():
+    """
+    Feature parity, asserted rather than assumed: the entries carry no pack reference, so every
+    behaviour downstream of begin() should be identical. Worth pinning, because "should be" is how
+    the prose fallback survived this long.
+    """
+    state: InterviewState = play(begin_from_questions("pizza_delivery", DERIVED), "1", "1")
+    state, outcome = state.go_back("Q1")
+
+    assert outcome.status == REOPENED
+    assert state.current.label == "Q1"
+    assert "(currently on file)" in outcome.prompt
+    assert not state.curated
+
+
+def test_an_ambiguous_answer_is_queried_without_a_pack():
+    """
+    The screenshot failure, for a domain nobody wrote a pack for.
+    """
+    questions: list[dict] = [
+        {
+            "question": "Which approval gates a release?",
+            "options": ["a CR approved by the board", "a CR approved by the owner"],
+            "why": "sets the gate.",
+        }
+    ]
+    state: InterviewState = begin_from_questions("release_management", questions)
+    after, outcome = state.record("a CR")
+
+    assert outcome.status == AMBIGUOUS
+    assert len(outcome.candidates) == 2
+    assert not after.current.answered
+
+
+@pytest.mark.parametrize(
+    ("questions", "expected"),
+    [
+        ([], "no questions were given"),
+        ([{"question": "", "options": ["a", "b"]}], "no question text"),
+        ([{"question": "Which one?", "options": ["only one"]}], "at least two"),
+        ([{"question": "Which one?", "options": []}], "at least two"),
+        (["not an object"], "not an object"),
+    ],
+)
+def test_unusable_derived_questions_are_refused_with_the_reason(questions, expected):
+    """
+    The model composes these, so they arrive malformed sometimes, and the error has to say which
+    question and what is wrong with it - otherwise the designer's only recourse is to guess or to
+    go back to asking in prose, which is what this replaced.
+
+    A single option is refused on purpose: with nothing to choose between, the reply comes back as
+    prose and nothing can tell whether it settled anything.
+    """
+    with pytest.raises(ValueError, match=expected):
+        begin_from_questions("somewhere", questions)
 
 
 # --------------------------------------------------------------------------------------

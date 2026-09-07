@@ -271,9 +271,19 @@ A2. If a domain matches, ALWAYS call ExtractDocs (app_name: "<that domain>") to 
 
     If no domain matches, or ExtractDocs returns an error, say so plainly in one sentence - "I have no
     curated knowledge for this domain, so this network will be built on general knowledge only and its
-    standards are not verified" - name the domains that ARE available, then derive four to six questions
-    of your own and continue, asking them in the same numbered form as below. Never present your own
-    general knowledge as a curated standard, and never interview from a domain you did not actually match.
+    standards are not verified" - and name the domains that ARE available. Then derive four to six
+    questions of your own and START THE INTERVIEW WITH THEM: call InterviewLog (action: "start",
+    questions: [...]), one object per question with its "question", at least two "options" and its
+    "why", and carry on from A3 exactly as if they had come from a pack.
+
+    Do not hand-ask them yourself. A pack buys standards somebody verified; it must not also be the
+    price of a numbered question, an ambiguous answer being queried, or being able to go back and fix a
+    typo. Those are how the interview works, not a feature of the three domains that happen to ship
+    with packs - and a deployment's own domains will mostly not have packs yet.
+
+    "curated" comes back false for such an interview and stays false. Never present your own general
+    knowledge as a curated standard, never claim a coverage table for it, and never interview from a
+    domain you did not actually match.
 A3. Call InterviewLog (action: "start", app_name: "<the domain you matched>") and print the "prompt" it
     returns VERBATIM as your question. Then, for every user reply, call InterviewLog again and print the
     "prompt" it returns. That tool holds the interview: the question list, the answers, which question is
@@ -637,7 +647,9 @@ and where a request to go back lands. Returns a "prompt" you print VERBATIM as y
 are the pack's own example answers, in the pack's order, with "something else" and "not sure" appended.
 Do not keep your own answer log and do not compose your own questions; a second log will disagree with
 this one.
-Call with action "start" and the app_name you passed to ExtractDocs, before asking anything. Then call it
+Call with action "start" and the app_name you passed to ExtractDocs, before asking anything. If NO curated
+domain matched, call "start" with `questions` instead - the questions you derived - and the interview works
+the same way; "curated" comes back false, and no standard may then be claimed as verified. Then call it
 for EVERY user reply: "answer" with their words verbatim, "back" when they ask to change an earlier
 answer, "assume" with a default you chose when they say they do not know, "log" to see what is on file.
 Branch on the returned "status": "recorded" and "reopened" carry the next question to print, "ambiguous"
@@ -653,6 +665,29 @@ means the reply fits several options and the variable is still open, "complete" 
                         "app_name": {
                             "type": "string",
                             "description": "For `start`: the curated domain to interview from, exactly as ListDomains reported it."
+                        },
+                        "questions": {
+                            "type": "array",
+                            "description": "For `start` when NO curated domain matches: the questions you derived for this domain. The interview then works exactly as it does for a pack - numbered options, no guessing an ambiguous answer, and the user can go back - but nothing may be claimed as a verified standard.",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "question": {
+                                        "type": "string",
+                                        "description": "The question, phrased the way a colleague would ask it."
+                                    },
+                                    "options": {
+                                        "type": "array",
+                                        "description": "At least two concrete example answers to offer. The two escapes are added for you.",
+                                        "items": {"type": "string"}
+                                    },
+                                    "why": {
+                                        "type": "string",
+                                        "description": "One short clause on what the answer changes about the design."
+                                    }
+                                },
+                                "required": ["question", "options", "why"]
+                            }
                         },
                         "reply": {
                             "type": "string",

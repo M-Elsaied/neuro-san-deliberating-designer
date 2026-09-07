@@ -34,6 +34,7 @@ of which depends on the model having remembered any of it correctly.
 """
 
 import asyncio
+import json
 import logging
 from typing import Any
 
@@ -44,6 +45,7 @@ from coded_tools.agent_network_designer.interview_state import INTERVIEW_LOG
 from coded_tools.agent_network_designer.interview_state import InterviewState
 from coded_tools.agent_network_designer.interview_state import Outcome
 from coded_tools.agent_network_designer.interview_state import begin
+from coded_tools.agent_network_designer.interview_state import begin_from_questions
 from coded_tools.agent_network_designer.interview_state import from_dict
 from coded_tools.agent_network_designer.interview_state import to_dict
 from coded_tools.agent_network_designer.knowledge_pack import KnowledgePack
@@ -75,7 +77,9 @@ class InterviewLog(CodedTool):
         """
         :param args: An argument dictionary with the following keys:
             - "action" (str): one of "start", "answer", "back", "assume", "log".
-            - "app_name" (str): required for "start" - the curated domain to interview from.
+            - "app_name" (str): for "start" - the curated domain to interview from.
+            - "questions" (list): for "start" when no pack matches - questions the designer
+              derived, each with "question", "options" (at least two) and "why".
             - "reply" (str): required for "answer" - what the user said, verbatim.
             - "target" (str): optional for "back" - how the user named the entry, in their own
               words. Empty means one question back.
@@ -101,6 +105,8 @@ class InterviewLog(CodedTool):
                 - "assumed" (list): the defaults the designer chose, same shape, for the brief's
                   "Assumptions I made" section.
                 - "outstanding" (int): how many open variables still have no answer.
+                - "curated" (bool): False when the questions were derived for a domain with no
+                  pack, in which case no operating standard may be claimed as verified.
                 - "candidates" (list): the options a reply was tied between, when status is
                   "ambiguous" or "choose".
                 - "note" (str): one line of context, when there is any.
@@ -164,9 +170,13 @@ class InterviewLog(CodedTool):
         :return: See invoke().
         """
         domain_id: str = str(args.get("app_name") or "").strip()
+        derived: Any = args.get("questions")
+        if derived:
+            return self._start_derived(domain_id, derived, sly_data)
         if not domain_id:
             return (
-                f"Error: No domain given to interview from. "
+                f"Error: No domain given to interview from, and no questions to ask. Pass app_name "
+                f"for a curated domain, or questions for one this deployment has no pack for. "
                 f"Available curated domains: {', '.join(discover_domains()) or 'none'}"
             )
         try:
@@ -181,6 +191,38 @@ class InterviewLog(CodedTool):
 
         sly_data[INTERVIEW_LOG] = to_dict(state)
         logger.debug("Interview %s: opened with %d open variable(s)", domain_id, len(state.entries))
+        return self._respond(state, Outcome(status=START, prompt=state.render(), entry=state.current))
+
+    def _start_derived(self, domain_id: str, questions: Any, sly_data: dict[str, Any]) -> dict[str, Any] | str:
+        """
+        Open an interview for a domain this deployment has no pack for.
+
+        Same machinery, same numbering, same answer log, same way back - the only thing a pack buys
+        that this does not is standards that were verified by somebody. Before this existed an
+        unmatched domain got a hand-composed interview with none of it, so every use case outside
+        the shipped packs was back to the behaviour this work set out to fix.
+
+        :param domain_id: What the designer is calling this domain.
+        :param questions: The derived questions, as a list or as JSON text.
+        :param sly_data: See invoke().
+        :return: See invoke().
+        """
+        if isinstance(questions, str):
+            # Models pass a JSON array as a string about as often as they pass a real one.
+            try:
+                questions = json.loads(questions)
+            except json.JSONDecodeError as exception:
+                return f"Error: 'questions' was text but not valid JSON: {exception}"
+        if not isinstance(questions, list):
+            return "Error: 'questions' must be a list of objects with 'question', 'options' and 'why'."
+
+        try:
+            state: InterviewState = begin_from_questions(domain_id or "uncurated", questions)
+        except ValueError as exception:
+            return f"Error: {exception}"
+
+        sly_data[INTERVIEW_LOG] = to_dict(state)
+        logger.debug("Interview %s: opened UNCURATED with %d question(s)", state.domain_id, len(state.entries))
         return self._respond(state, Outcome(status=START, prompt=state.render(), entry=state.current))
 
     @staticmethod
@@ -203,6 +245,10 @@ class InterviewLog(CodedTool):
             "confirmed": confirmed,
             "assumed": assumed,
             "outstanding": len(state.outstanding),
+            # False when the questions were derived rather than read from a pack. Returned on every
+            # action so a long session cannot forget it and start describing derived questions as
+            # curated standards.
+            "curated": state.curated,
             "candidates": list(outcome.candidates),
             "note": outcome.note,
         }

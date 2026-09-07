@@ -366,6 +366,25 @@ def test_a_default_is_recorded_as_assumed_and_not_as_an_answer(front_man):
     assert 'never record a default through action "answer" instead' in phase_a
 
 
+def test_a_domain_with_no_pack_still_gets_the_real_interview(front_man):
+    """
+    The generality claim, at the one place it was quietly untrue.
+
+    The three shipped packs are examples, not the product - a deployment's own domains will mostly
+    have no pack yet. Until this instruction existed, an unmatched domain fell back to the model
+    asking its own questions in prose, which lost the numbering, the ambiguity check and the answer
+    log together: the exact failure this work started from, for every use case outside the packs.
+    A pack should buy verified standards, not the ability to go back and fix a typo.
+    """
+    phase_a: str = collapse(str(front_man.get("instructions") or "")).split("PHASE B")[0]
+
+    assert "START THE INTERVIEW WITH THEM" in phase_a
+    assert 'InterviewLog (action: "start", questions:' in phase_a
+    assert "Do not hand-ask them yourself" in phase_a
+    # And the honesty guarantee that has to survive it.
+    assert '"curated" comes back false for such an interview and stays false' in phase_a
+
+
 def test_the_brief_takes_its_answers_from_the_log_not_from_memory(front_man):
     """
     The gap where the computed interview met a recalled document.
