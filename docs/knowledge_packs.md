@@ -77,6 +77,10 @@ The **why** matters more than it looks. It is what lets the designer justify a q
 itself understand — it has no idea what Data Guard is, and does not need to. A pack that omits the
 why-clause is reported by validation.
 
+The **examples** become the numbered options the user picks from, verbatim and in your order, so write them
+as distinct answers a requester could pick: an answer that is a shortening of two of them is sent back as
+ambiguous. The first bullet is `Q1` for the whole session.
+
 ## `pack.hocon`
 
 ```hocon

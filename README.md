@@ -39,6 +39,12 @@ Ports already taken? `ns run --nsflow-port 4174 --server-http-port 8081`.
 
 - **It deliberates first.** Curated knowledge for the domain is retrieved, then you are interviewed one
   question at a time. Nothing is built until you approve.
+- **Questions are numbered choices, and you can go back.** Each question lists the pack's own example
+  answers plus *something else* and *not sure*. An answer that fits two options is asked about, not guessed,
+  and *go back*, `back three` or `change question 3` reopens an earlier answer without losing the others.
+  With no pack the designer derives the questions and runs the same interview, marked `curated: false`.
+- **The interview is state, not memory.** The questions, answers and position live in the `InterviewLog`
+  coded tool rather than in the model's context, so labels never shift and `back three` lands three back.
 - **Knowledge lives in documents, not in the prompt.** Each domain is a folder - a *knowledge pack* - under
   `coded_tools/agent_network_designer/knowdocs/<domain>/`, read by the `ExtractDocs` coded tool. Packs are
   discovered by scanning that root, so adding a domain is dropping a folder in; point
@@ -47,7 +53,8 @@ Ports already taken? `ns run --nsflow-port 4174 --server-http-port 8081`.
 - **It ends with a design brief** that separates confirmed requirements from flagged assumptions.
 - **Standards stay traceable, and the trace is checked.** Each one appears in its owning agent as
   `MUST: <text> [<id>]`, and the closing coverage table is *computed* by `VerifyStandards` rather than
-  written by the model about its own work. See [knowledge packs](docs/knowledge_packs.md).
+  written by the model about its own work. See [knowledge packs](docs/knowledge_packs.md) and
+  [the deliberation interview](docs/deliberation_interview.md).
 
 | Domain | `app_name` | Standard ids |
 |---|---|---|
@@ -78,7 +85,8 @@ quoted verbatim (*take a full RMAN backup before applying any patch*) - it is **
 knowledge varies per instance and only the requester has it (*RAC or single instance?*) - it is
 **elicited**, one question per turn. Open variables are written as
 `id | question | example answers | why it changes the design`, so the shell can justify a question it does
-not itself understand.
+not itself understand - and the example answers become the numbered options you pick from, which is what
+makes an under-specified answer visible rather than something the model has to guess past.
 
 **Temporal role determines topology.** This is the rule that turns knowledge into architecture, and it is
 domain-neutral:

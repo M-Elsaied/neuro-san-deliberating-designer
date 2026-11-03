@@ -22,6 +22,7 @@ from unittest import TestCase
 from neuro_san.internals.run_context.langchain.core.langchain_openai_function_tool import LangChainOpenAIFunctionTool
 from pyhocon import ConfigFactory
 
+from coded_tools.agent_network_designer.interview_state import InterviewState
 from coded_tools.agent_network_designer.knowledge_pack import KnowledgePack
 
 
@@ -33,7 +34,19 @@ class TestDesignerRegistry(TestCase):
 
     REGISTRY_PATH: Path = Path("registries/agent_network_designer.hocon")
     CODED_TOOLS_DIR: Path = Path("coded_tools/agent_network_designer")
-    KNOWLEDGE_TOOLS: tuple[str, ...] = ("ListDomains", "ExtractDocs", "VerifyStandards")
+    KNOWLEDGE_TOOLS: tuple[str, ...] = ("ListDomains", "ExtractDocs", "InterviewLog", "VerifyStandards")
+    # One sentence per promise the prompt hands to InterviewLog, each guarding a failure seen in a live session.
+    INTERVIEW_CONTRACT: tuple[str, ...] = (
+        "You do NOT keep the answer log yourself",
+        'PRINT THE "prompt" STRING AND NOTHING ELSE FROM THE TOOL',
+        'removes "something else" and "I am not sure"',
+        'reply: "<what they said, VERBATIM>"',
+        "The variable is STILL OPEN",
+        'action: "back", target: "<their words, VERBATIM>"',
+        'never record a default through action "answer" instead',
+        "START THE INTERVIEW WITH THEM",
+        "take the brief's two answer sections from InterviewLog, not from your memory",
+    )
     BUILDING_TOOLS: tuple[str, ...] = (
         "agent_network_editor",
         "agent_network_instructions_editor",
@@ -113,14 +126,27 @@ class TestDesignerRegistry(TestCase):
                 self.assertIn(tool, declared)
                 self.assertIn(tool, wired)
 
-    def test_pack_provenance_survives_between_turns(self) -> None:
+    def test_pack_provenance_and_the_interview_survive_between_turns(self) -> None:
         """
-        Session sly_data is rebuilt from the client each turn, so the provenance ExtractDocs records during the
-        interview reaches persistence only if it is allowed upstream.
+        Session sly_data is rebuilt from the client each turn, so the provenance ExtractDocs records and the
+        interview InterviewLog holds outlive a turn only if they are allowed upstream. The interview carries what
+        the user said about their own estate, so it is not sent to tracing.
         """
         allow: dict[str, Any] = dict(self.front_man.get("allow") or {})
-        upstream: dict[str, Any] = dict(allow.get("to_upstream") or {})
-        self.assertIn(KnowledgePack.PROVENANCE_KEY, list(upstream.get("sly_data", [])))
+        upstream: list[str] = list(dict(allow.get("to_upstream") or {}).get("sly_data", []))
+        self.assertIn(KnowledgePack.PROVENANCE_KEY, upstream)
+        self.assertIn(InterviewState.SLY_DATA_KEY, upstream)
+        self.assertNotIn(InterviewState.SLY_DATA_KEY, str(allow.get("to_tracing")))
+
+    def test_the_interview_is_driven_by_the_tool_rather_than_remembered(self) -> None:
+        """
+        The prompt's half of the interview: it prints what InterviewLog returns and keeps no log of its own.
+        """
+        phase_a: str = self.instructions.partition("PHASE B - BUILD")[0]
+        for sentence in self.INTERVIEW_CONTRACT:
+            with self.subTest(sentence=sentence):
+                self.assertIn(sentence, phase_a)
+        self.assertIn("Going back to an earlier answer is NOT skipping and is never refused", self.instructions)
 
     def test_the_prompt_names_no_domain(self) -> None:
         """
