@@ -256,6 +256,8 @@ class TestStandardsVerifier(TestCase):
                 StandardsVerifier.read_network_definition(Path(temporary) / "missing.hocon")
             malformed: dict[str, str] = {
                 "missing_include.hocon": """{ include required("nowhere.hocon")\n "tools": [{ "name": "a" }] }""",
+                "list_root.hocon": """[{ "name": "a" }]""",
+                "scalar_tools.hocon": """{ "tools": [1, 2] }""",
             }
             for file_name, content in malformed.items():
                 with self.subTest(file_name=file_name):

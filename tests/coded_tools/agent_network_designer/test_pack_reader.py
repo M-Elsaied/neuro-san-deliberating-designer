@@ -176,6 +176,21 @@ class TestPackReader(TestCase):
             writer.write(pdf_file)
         self.assertEqual("\n\n--- Page 1 ---\n\n\n\n--- Page 2 ---\n\n", PackReader.read_pdf(pdf_path))
 
+    def test_a_domain_id_that_is_a_path_is_a_miss(self) -> None:
+        """
+        The domain id comes from the model, so it cannot reach documents outside the knowdocs root.
+        """
+        knowdocs: Path = self.root / "knowdocs"
+        PackFixtures.write_pack(knowdocs, "real", "- ABC-01: A rule.\n")
+        outside: Path = self.root / "outside"
+        outside.mkdir()
+        (outside / "private.md").write_text("Not a knowledge pack.", encoding="utf-8")
+        for domain_id in ("../outside", str(outside), "real/..", "..", ".", ""):
+            with self.subTest(domain_id=domain_id):
+                with self.assertRaises(FileNotFoundError):
+                    PackReader.load_pack(domain_id, knowdocs)
+        self.assertEqual("real", PackReader.load_pack("real", knowdocs).domain_id)
+
     def test_a_symlinked_pack_directory_is_still_a_domain(self) -> None:
         """
         A deployment can link a pack in from elsewhere on disk.
@@ -186,3 +201,30 @@ class TestPackReader(TestCase):
         (knowdocs / "linked").symlink_to(stored, target_is_directory=True)
         self.assertEqual(["linked"], PackReader.discover_domains(knowdocs))
         self.assertEqual([Standard("ABC-01", "A rule.")], PackReader.load_pack("linked", knowdocs).standards)
+
+    def test_a_pack_is_addressed_by_its_directory_not_its_declared_id(self) -> None:
+        """
+        ListDomains reports the id that ExtractDocs and VerifyStandards can load, so a different declared id is
+        logged and ignored.
+        """
+        manifest: str = """{ domain_id = "declared_name"\n version = "1.0" }\n"""
+        PackFixtures.write_pack(self.root, "folder_name", "- ABC-01: A rule.\n", manifest)
+        with self.assertLogs("coded_tools.agent_network_designer.pack_reader", level="WARNING") as logs:
+            pack: KnowledgePack = PackReader.load_pack("folder_name", self.root)
+        self.assertEqual("folder_name", pack.domain_id)
+        self.assertIn("declares domain_id 'declared_name'", logs.output[0])
+
+    def test_a_malformed_manifest_is_reported_and_does_not_hide_other_packs(self) -> None:
+        """
+        One unparseable pack.hocon is an error for that pack only; the catalog still lists the rest.
+        """
+        PackFixtures.write_pack(self.root, "broken", "- ABC-01: A rule.\n", "{ version = ")
+        PackFixtures.write_pack(self.root, "fine", "- ABC-01: A rule.\n")
+        with self.assertRaisesRegex(ValueError, "Could not parse"):
+            PackReader.load_pack("broken", self.root)
+        with self.assertLogs("coded_tools.agent_network_designer.pack_reader", level="WARNING") as logs:
+            catalog: list[KnowledgePack] = PackReader.load_catalog(self.root)
+        self.assertEqual(1, len(logs.output))
+        self.assertIn("Skipping knowledge pack broken", logs.output[0])
+        self.assertEqual(1, len(catalog))
+        self.assertEqual("fine", catalog[0].domain_id)

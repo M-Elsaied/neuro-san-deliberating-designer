@@ -44,13 +44,16 @@ class PackParser:
         :return: The standards, in document order.
         """
         roles = roles or {}
-        matcher: re.Pattern = PackParser.compile_with_fallback(r"^({})\s*[:.]\s*(.+)$", id_pattern)
+        # Named groups, so that groups inside the pack's own pattern do not shift which group holds the text.
+        matcher: re.Pattern = PackParser.compile_with_fallback(
+            r"^(?P<standard_id>{})\s*[:.]\s*(?P<standard_text>.+)$", id_pattern
+        )
         standards: list[Standard] = []
         for bullet in PackParser.get_bullets(text):
             match: re.Match | None = matcher.match(bullet.strip())
             if match is not None:
-                standard_id: str = match.group(1).strip()
-                standard_text: str = match.group(2).strip()
+                standard_id: str = match.group("standard_id").strip()
+                standard_text: str = match.group("standard_text").strip()
                 standards.append(Standard(standard_id, standard_text, roles.get(standard_id)))
         return standards
 

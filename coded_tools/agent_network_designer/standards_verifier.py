@@ -210,18 +210,26 @@ class StandardsVerifier:
                 f"A network's includes are relative to the repository root, so run this from there."
             ) from exception
 
-        tools: Any = config.get("tools", None)
+        try:
+            tools: Any = config.get("tools", None)
+        except AttributeError as exception:
+            raise ValueError(f"{path} is not a HOCON object; it does not look like an agent network.") from exception
         if not tools:
             raise ValueError(f"{path} declares no tools; it does not look like an agent network.")
         definition: dict[str, Any] = {}
-        for entry in tools:
-            agent: dict[str, Any] = dict(entry)
-            name: str = str(agent.get("name", "")).strip()
-            if name:
-                definition[name] = {
-                    "instructions": str(agent.get("instructions", "") or ""),
-                    "tools": list(agent.get("tools", []) or []),
-                }
+        try:
+            for entry in tools:
+                agent: dict[str, Any] = dict(entry)
+                name: str = str(agent.get("name", "")).strip()
+                if name:
+                    definition[name] = {
+                        "instructions": str(agent.get("instructions", "") or ""),
+                        "tools": list(agent.get("tools", []) or []),
+                    }
+        except (TypeError, ValueError) as exception:
+            raise ValueError(
+                f"{path} has a malformed tools entry; it does not look like an agent network."
+            ) from exception
         return definition
 
     @staticmethod
@@ -243,12 +251,8 @@ class StandardsVerifier:
         arguments: Namespace = parser.parse_args(argv)
         try:
             pack: KnowledgePack = PackReader.load_pack(arguments.domain, arguments.knowdocs)
-        except OSError as exception:
-            print(f"Error: {exception}", file=sys.stderr)
-            return 2
-        try:
             definition: dict[str, Any] = StandardsVerifier.read_network_definition(arguments.network)
-        except ValueError as exception:
+        except (OSError, ValueError) as exception:
             print(f"Error: {exception}", file=sys.stderr)
             return 2
         result: VerificationResult = StandardsVerifier.verify(pack, definition)

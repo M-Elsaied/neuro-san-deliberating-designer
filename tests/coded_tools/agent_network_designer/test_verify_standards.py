@@ -14,6 +14,8 @@
 #
 # END COPYRIGHT
 
+import tempfile
+from pathlib import Path
 from typing import Any
 from unittest import IsolatedAsyncioTestCase
 
@@ -100,3 +102,16 @@ class TestVerifyStandards(IsolatedAsyncioTestCase):
         """
         result: Any = await VerifyStandards().async_invoke({"app_name": self.DOMAIN}, None)
         self.assertTrue(result.startswith("Error: No agent network definition"))
+
+    async def test_an_unreadable_pack_is_reported_as_unreadable_not_missing(self) -> None:
+        """
+        A pack that exists but cannot be read is a different problem from an unknown domain, so the error says so.
+        """
+        with tempfile.TemporaryDirectory() as temporary:
+            PackFixtures.write_pack(Path(temporary), "broken", "- ABC-01: A rule.\n", "{ version = ")
+            PackFixtures.use_knowdocs_root(self, Path(temporary))
+            result: Any = await VerifyStandards().async_invoke(
+                {"app_name": "broken"}, {"agent_network_definition": self.network}
+            )
+        self.assertTrue(result.startswith("""Error: The knowledge pack for domain "broken" could not be read"""))
+        self.assertNotIn("Available curated domains", result)

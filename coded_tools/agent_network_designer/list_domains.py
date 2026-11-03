@@ -14,6 +14,7 @@
 #
 # END COPYRIGHT
 
+import asyncio
 import logging
 from typing import Any
 
@@ -65,10 +66,10 @@ class ListDomains(CodedTool):
 
     async def async_invoke(self, args: dict[str, Any], sly_data: dict[str, Any]) -> dict[str, Any] | str:
         """
-        Delegate to invoke().
+        Runs invoke() in a worker thread, since it reads every pack from disk.
 
         :param args: See invoke().
         :param sly_data: See invoke().
         :return: See invoke().
         """
-        return self.invoke(args, sly_data)
+        return await asyncio.to_thread(self.invoke, args, sly_data)

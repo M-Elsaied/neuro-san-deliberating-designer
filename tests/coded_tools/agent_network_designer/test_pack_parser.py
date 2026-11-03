@@ -93,6 +93,14 @@ class TestPackParser(TestCase):
         )
         self.assertEqual([expected], PackParser.parse_open_variables(text))
 
+    def test_a_pattern_with_its_own_groups_keeps_the_standard_text(self) -> None:
+        """
+        A declared pattern such as "(ODB|K8S)-\\d+" has a group of its own, which must not be read as the text.
+        """
+        text: str = "- ODB-01: Back up first.\n- K8S-02: Drain the node.\n"
+        expected: list[Standard] = [Standard("ODB-01", "Back up first."), Standard("K8S-02", "Drain the node.")]
+        self.assertEqual(expected, PackParser.parse_standards(text, r"(ODB|K8S)-\d+"))
+
     def test_an_empty_field_does_not_pad_the_question(self) -> None:
         """
         An empty field between pipes is kept, but the question is trimmed at both ends.

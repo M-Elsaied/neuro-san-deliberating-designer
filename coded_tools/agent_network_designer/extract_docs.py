@@ -14,6 +14,7 @@
 #
 # END COPYRIGHT
 
+import asyncio
 import logging
 from typing import Any
 
@@ -50,11 +51,14 @@ class ExtractDocs(CodedTool):
             return f"Error: No domain provided. Available curated domains: {PackReader.describe_domains()}"
         try:
             pack: KnowledgePack = PackReader.load_pack(domain_id)
-        except OSError:
+        except FileNotFoundError:
             return (
                 f"""Error: No curated knowledge for domain "{domain_id}". """
                 f"Available curated domains: {PackReader.describe_domains()}"
             )
+        except (OSError, ValueError) as exception:
+            logger.warning("Could not read knowledge pack %s: %s", domain_id, exception)
+            return f"""Error: The knowledge pack for domain "{domain_id}" could not be read: {exception}"""
         if not pack.documents:
             root: str = str(PackReader.get_knowdocs_root())
             return f"""ERROR: No knowledge documents found for domain "{domain_id}" under {root}."""
@@ -82,10 +86,10 @@ class ExtractDocs(CodedTool):
 
     async def async_invoke(self, args: dict[str, Any], sly_data: dict[str, Any]) -> dict[str, Any] | str:
         """
-        Delegate to invoke().
+        Runs invoke() in a worker thread, since it reads the pack from disk.
 
         :param args: See invoke().
         :param sly_data: See invoke().
         :return: See invoke().
         """
-        return self.invoke(args, sly_data)
+        return await asyncio.to_thread(self.invoke, args, sly_data)

@@ -18,6 +18,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 from unittest import IsolatedAsyncioTestCase
+from unittest import mock
 
 from coded_tools.agent_network_designer.extract_docs import ExtractDocs
 from coded_tools.agent_network_designer.knowledge_pack import KnowledgePack
@@ -64,7 +65,7 @@ class TestExtractDocs(IsolatedAsyncioTestCase):
         """
         A miss is explicit and lists what exists, so the designer can say it has no curated knowledge.
         """
-        for args in ({"app_name": "pizza_delivery"}, {}):
+        for args in ({"app_name": "pizza_delivery"}, {"app_name": "../../.."}, {}):
             with self.subTest(args=args):
                 result: Any = await ExtractDocs().async_invoke(args, {})
                 self.assertTrue(result.startswith("Error: No"))
@@ -77,14 +78,27 @@ class TestExtractDocs(IsolatedAsyncioTestCase):
         result: Any = await ExtractDocs().async_invoke({"app_name": self.DOMAIN}, None)
         self.assertIn(PackReader.STANDARDS_FILENAME, result.get("files"))
 
-    async def test_a_pack_directory_without_documents_is_an_error(self) -> None:
+    async def test_a_pack_without_documents_or_with_a_broken_manifest_is_an_error(self) -> None:
         """
-        A pack folder holding only pack.hocon has nothing for the designer to read.
+        A pack folder holding only pack.hocon has nothing to read, and an unparseable one cannot be trusted.
         """
         with tempfile.TemporaryDirectory() as temporary:
             root: Path = Path(temporary)
             (root / "empty").mkdir()
             (root / "empty" / PackReader.MANIFEST_FILENAME).write_text("""{ version = "1" }""", encoding="utf-8")
+            PackFixtures.write_pack(root, "broken", "- ABC-01: A rule.\n", "{ version = ")
             PackFixtures.use_knowdocs_root(self, root)
-            result: Any = await ExtractDocs().async_invoke({"app_name": "empty"}, {})
-        self.assertTrue(result.startswith("""ERROR: No knowledge documents found for domain "empty" under"""))
+            empty: Any = await ExtractDocs().async_invoke({"app_name": "empty"}, {})
+            broken: Any = await ExtractDocs().async_invoke({"app_name": "broken"}, {})
+        self.assertTrue(empty.startswith("""ERROR: No knowledge documents found for domain "empty" under"""))
+        self.assertTrue(broken.startswith("""Error: The knowledge pack for domain "broken" could not be read"""))
+
+    async def test_an_unreadable_pack_directory_is_not_reported_as_missing(self) -> None:
+        """
+        A permission error is logged and named as such, rather than looking like an unknown domain.
+        """
+        with mock.patch.object(PackReader, "load_pack", side_effect=PermissionError("Permission denied")):
+            with self.assertLogs("coded_tools.agent_network_designer.extract_docs", level="WARNING"):
+                result: Any = await ExtractDocs().async_invoke({"app_name": self.DOMAIN}, {})
+        self.assertTrue(result.startswith("""Error: The knowledge pack for domain "oracle_database_patching" could"""))
+        self.assertIn("Permission denied", result)

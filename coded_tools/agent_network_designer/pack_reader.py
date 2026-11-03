@@ -14,17 +14,22 @@
 #
 # END COPYRIGHT
 
+import logging
 import os
 from pathlib import Path
 from typing import Any
 
 from pyhocon import ConfigFactory
+from pyhocon.exceptions import ConfigException
+from pyparsing.exceptions import ParseBaseException
 from pypdf import PdfReader
 from pypdf.errors import PyPdfError
 
 from coded_tools.agent_network_designer.knowledge_pack import KnowledgePack
 from coded_tools.agent_network_designer.pack_manifest import PackManifest
 from coded_tools.agent_network_designer.pack_parser import PackParser
+
+logger = logging.getLogger(__name__)
 
 
 class PackReader:
@@ -105,11 +110,14 @@ class PackReader:
         :param domain_id: The domain id, which is the pack's directory name.
         :param root: The knowdocs root, or None to resolve it as get_knowdocs_root() does.
         :return: The loaded pack.
-        :raises FileNotFoundError: If there is no pack directory for the domain.
+        :raises FileNotFoundError: If there is no pack directory for the domain, or the id is not a plain
+            directory name.
+        :raises ValueError: If the pack's pack.hocon cannot be parsed.
         """
         resolved: Path = PackReader.get_knowdocs_root(root)
         directory: Path = resolved / domain_id
-        if not directory.is_dir():
+        # The id comes from the model, so a path such as "../.." must not read documents from outside the root.
+        if not domain_id or Path(domain_id).name != domain_id or domain_id == ".." or not directory.is_dir():
             raise FileNotFoundError(f"""No knowledge pack for domain "{domain_id}" under {resolved}""")
 
         manifest: PackManifest = PackReader.read_manifest(directory, domain_id)
@@ -129,37 +137,52 @@ class PackReader:
         Read every knowledge pack under the root.
 
         :param root: The knowdocs root, or None to resolve it as get_knowdocs_root() does.
-        :return: Every discoverable pack, in domain id order. A pack that cannot be read is skipped.
+        :return: Every discoverable pack, in domain id order. A pack that cannot be read or whose pack.hocon cannot be
+            parsed is logged and skipped, so one bad pack does not hide the others.
         """
         packs: list[KnowledgePack] = []
         for domain_id in PackReader.discover_domains(root):
             try:
                 packs.append(PackReader.load_pack(domain_id, root))
-            except OSError:
-                continue
+            except (OSError, ValueError) as exception:
+                logger.warning("Skipping knowledge pack %s, which could not be read: %s", domain_id, exception)
         return packs
 
     @staticmethod
     def read_manifest(directory: Path, domain_id: str) -> PackManifest:
         """
         Read a pack's pack.hocon. A pack without one gets a manifest inferred from its directory name, which
-        PackValidator reports as a warning.
+        PackValidator reports as a warning. A pack is always addressed by its directory name, so a different
+        declared domain_id is logged and ignored, or ListDomains would advertise an id that cannot be loaded.
 
         :param directory: The pack directory.
-        :param domain_id: The domain id, from the directory name, used when pack.hocon declares none.
+        :param domain_id: The domain id, from the directory name.
         :return: The manifest.
+        :raises ValueError: If pack.hocon cannot be parsed, or its roles are not a mapping.
         """
         title: str = domain_id.replace("_", " ")
         manifest_path: Path = directory / PackReader.MANIFEST_FILENAME
         if not manifest_path.is_file():
             return PackManifest(domain_id=domain_id, title=title, synthesized=True)
 
-        config: Any = ConfigFactory.parse_file(str(manifest_path))
+        try:
+            config: Any = ConfigFactory.parse_file(str(manifest_path))
+            raw_roles: dict[Any, Any] = dict(config.get("roles", {}) or {})
+        except (ConfigException, ParseBaseException, TypeError, ValueError) as exception:
+            raise ValueError(f"Could not parse {manifest_path}: {exception}") from exception
         roles: dict[str, str] = {}
-        for standard_id, role in dict(config.get("roles", {}) or {}).items():
+        for standard_id, role in raw_roles.items():
             roles[str(standard_id)] = str(role).strip().lower()
+        declared_id: str = PackReader.get_text(config, "domain_id", domain_id)
+        if declared_id and declared_id != domain_id:
+            logger.warning(
+                "%s declares domain_id %r, but packs are addressed by directory name, so it loads as %r",
+                manifest_path,
+                declared_id,
+                domain_id,
+            )
         return PackManifest(
-            domain_id=PackReader.get_text(config, "domain_id", domain_id) or domain_id,
+            domain_id=domain_id,
             title=PackReader.get_text(config, "title", title),
             summary=PackReader.get_text(config, "summary"),
             version=PackReader.get_text(config, "version"),
@@ -211,6 +234,7 @@ class PackReader:
                 chunks.append(page.extract_text() or "")
             return "".join(chunks)
         except (PyPdfError, OSError) as exception:
+            logger.warning("Could not read PDF %s: %s", path, exception)
             return f"ERROR: Error reading PDF {path}: {exception}"
 
     @staticmethod
