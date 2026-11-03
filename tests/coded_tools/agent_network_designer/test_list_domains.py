@@ -44,7 +44,8 @@ class TestListDomains(IsolatedAsyncioTestCase):
         oracle: dict[str, Any] = domains.get("oracle_database_patching")
         self.assertEqual("Oracle database patching", oracle.get("title"))
         self.assertEqual("1.0.0", oracle.get("version"))
-        self.assertEqual(["ODB-01", "ODB-02", "ODB-03", "ODB-04", "ODB-05", "ODB-06"], oracle.get("standard_ids"))
+        self.assertEqual(6, oracle.get("standard_count"))
+        self.assertNotIn("standard_ids", oracle)
 
     async def test_a_deployment_without_packs_is_an_error(self) -> None:
         """

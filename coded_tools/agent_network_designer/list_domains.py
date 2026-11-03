@@ -38,7 +38,7 @@ class ListDomains(CodedTool):
 
         :param args: No keys are read.
         :param sly_data: No keys are read.
-        :return: "domains", one entry per pack with its "id", "title", "summary", "version" and "standard_ids",
+        :return: "domains", one entry per pack with its "id", "title", "summary", "version" and "standard_count",
             and their "count"; or an "Error: ..." string when the deployment has no packs.
         """
         packs: list[KnowledgePack] = PackCatalog.load_catalog()
@@ -50,16 +50,15 @@ class ListDomains(CodedTool):
 
         domains: list[dict[str, Any]] = []
         for pack in packs:
-            standard_ids: list[str] = []
-            for standard in pack.standards:
-                standard_ids.append(standard.standard_id)
             domains.append(
                 {
                     "id": pack.domain_id,
                     "title": pack.manifest.title or pack.domain_id,
                     "summary": pack.manifest.summary,
                     "version": pack.manifest.version,
-                    "standard_ids": standard_ids,
+                    # A count rather than the ids: choosing a domain never needs them, ExtractDocs returns them
+                    # next, and this payload stays in context for the rest of the conversation.
+                    "standard_count": len(pack.standards),
                 }
             )
         logger.debug("Curated knowledge catalog: %d domain(s)", len(domains))
