@@ -58,3 +58,13 @@ reaches the brief with its new value.
 When no curated domain matches, the designer derives its own questions, each with at least two example
 answers, and starts the same interview with them. It reports `curated: false` throughout, and no standard
 may be presented as verified.
+
+## Verification
+
+`interview_review` checks a recorded transcript against this behavior, with no model:
+`python -m coded_tools.agent_network_designer.interview_review <transcript.json>`.
+It reports a question with no numbered choice or escape (`OPTIONS`), an ambiguous reply resolved rather
+than asked about (`AMBIGUITY`) and a correction answered past (`REVISION`), as well as two questions in one
+turn, a brief missing a section or paraphrasing a standard, a phase gate that folded, and a closing table
+the model wrote itself. Exit code `0` when the transcript keeps every promise, `1` when it does not, `2` on
+a usage error.
