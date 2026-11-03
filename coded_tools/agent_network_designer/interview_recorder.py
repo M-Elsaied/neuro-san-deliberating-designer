@@ -21,6 +21,7 @@ from coded_tools.agent_network_designer.interview_options import InterviewOption
 from coded_tools.agent_network_designer.interview_outcome import InterviewOutcome
 from coded_tools.agent_network_designer.interview_renderer import InterviewRenderer
 from coded_tools.agent_network_designer.interview_state import InterviewState
+from coded_tools.agent_network_designer.model_reply_matcher import ModelReplyMatcher
 
 
 class InterviewRecorder:
@@ -30,12 +31,14 @@ class InterviewRecorder:
     """
 
     @staticmethod
-    def record(state: InterviewState, reply: str) -> InterviewOutcome:
+    def record(state: InterviewState, reply: str, matcher: ModelReplyMatcher | None = None) -> InterviewOutcome:
         """
         Resolve a reply against the entry on screen, and record it if it settles the question.
 
         :param state: The interview.
         :param reply: What the user said.
+        :param matcher: Proposes the options a free-text reply could mean, or None for containment. It proposes and
+            this decides, so it cannot settle a question the reply did not.
         :return: The outcome, carrying the state after it.
         """
         entry: InterviewEntry = state.current
@@ -43,7 +46,7 @@ class InterviewRecorder:
         picked: list[str] = InterviewRecorder.get_picked(state, text)
         held: InterviewOutcome | None = InterviewRecorder.get_refused(state, text, picked)
         if held is None:
-            held = InterviewRecorder.get_unsettled(state, text, picked)
+            held = InterviewRecorder.get_unsettled(state, text, picked, matcher)
         if held is not None:
             # A narrowed re-ask is numbered from 1, so the next state keeps the narrowed list on screen.
             return replace(held, state=replace(state, offered=held.shown))
@@ -120,13 +123,16 @@ class InterviewRecorder:
         return None
 
     @staticmethod
-    def get_unsettled(state: InterviewState, text: str, picked: list[str]) -> InterviewOutcome | None:
+    def get_unsettled(
+        state: InterviewState, text: str, picked: list[str], matcher: ModelReplyMatcher | None
+    ) -> InterviewOutcome | None:
         """
         Hold a reply open when it says nothing, picks or fits several options, or fits one while saying less than it.
 
         :param state: The interview.
         :param text: The reply, stripped.
         :param picked: The options the reply picked by number or quote.
+        :param matcher: Proposes the options a free-text reply could mean, or None for containment.
         :return: The outcome to return instead of recording, or None when the reply is an answer.
         """
         entry: InterviewEntry = state.current
@@ -142,7 +148,11 @@ class InterviewRecorder:
             )
         if picked:
             return None
-        consistent: tuple[str, ...] = tuple(InterviewOptions.get_consistent_options(text, state.on_screen))
+        consistent: tuple[str, ...] = tuple(
+            matcher.match(text, state.on_screen)
+            if matcher is not None
+            else InterviewOptions.get_consistent_options(text, state.on_screen)
+        )
         if len(consistent) > 1:
             lead: str = "Both of those match what you said, and they build different networks - which is it?"
             prompt = InterviewRenderer.render(state, options=consistent, lead=lead)

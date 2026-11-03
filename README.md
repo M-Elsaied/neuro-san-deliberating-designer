@@ -43,6 +43,9 @@ Ports already taken? `ns run --nsflow-port 4174 --server-http-port 8081`.
   answers plus *something else* and *not sure*. An answer that fits two options is asked about, not guessed,
   and *go back*, `back three` or `change question 3` reopens an earlier answer without losing the others.
   With no pack the designer derives the questions and runs the same interview, marked `curated: false`.
+- **Replies can be read by a model.** Set `AGENT_NETWORK_DESIGNER_MATCH_MODEL` and a model reads your reply
+  against the options, so *the CAB one* lands where containment finds nothing. It only proposes candidates;
+  whether that settles the question is still decided in code. Unset, no model, key or network is needed.
 - **The interview is state, not memory.** The questions, answers and position live in the `InterviewLog`
   coded tool rather than in the model's context, so labels never shift and `back three` lands three back.
 - **Knowledge lives in documents, not in the prompt.** Each domain is a folder - a *knowledge pack* - under

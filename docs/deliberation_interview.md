@@ -36,6 +36,12 @@ again. A narrowed re-ask numbers its options from `1`, and the next number is re
 not the pack's. `I'm not sure` and `something else` take their escapes as their numbers do. A `confirm`
 takes `yes` for the option it offered back, and on `no` asks again with every option.
 
+Set `AGENT_NETWORK_DESIGNER_MATCH_MODEL` to a model name and a language model reads the reply instead, so a
+paraphrase (`the CAB one`) is recognized; unset, `off`, `none` or `false` keeps
+containment. It calls the OpenAI client directly, not through the designer's LLM configuration. The model
+only proposes options: numbers outside the list on screen, escapes and repeats are dropped, any failure
+falls back to containment with a warning, and a number or exact quote never reaches it.
+
 ## Correcting an earlier answer
 
 Any earlier answer can be changed before the build, from any question and from the brief. `go back` is the

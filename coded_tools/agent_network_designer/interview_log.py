@@ -28,6 +28,7 @@ from coded_tools.agent_network_designer.interview_recorder import InterviewRecor
 from coded_tools.agent_network_designer.interview_renderer import InterviewRenderer
 from coded_tools.agent_network_designer.interview_state import InterviewState
 from coded_tools.agent_network_designer.knowledge_pack import KnowledgePack
+from coded_tools.agent_network_designer.model_reply_matcher import ModelReplyMatcher
 from coded_tools.agent_network_designer.pack_catalog import PackCatalog
 from coded_tools.agent_network_designer.pack_reader import PackReader
 
@@ -46,6 +47,15 @@ class InterviewLog(CodedTool):
     ASSUME: str = "assume"
     LOG: str = "log"
     ACTIONS: tuple[str, ...] = (START, ANSWER, BACK, ASSUME, LOG)
+
+    def __init__(self, matcher: ModelReplyMatcher | None = None) -> None:
+        """
+        Constructor.
+
+        :param matcher: Reads free-text replies, or None for the one this deployment is configured for. It is
+            reached only from here, so the front man cannot route around it.
+        """
+        self.matcher: ModelReplyMatcher | None = matcher or ModelReplyMatcher.from_environment()
 
     def invoke(self, args: dict[str, Any], sly_data: dict[str, Any]) -> dict[str, Any] | str:
         """
@@ -67,7 +77,7 @@ class InterviewLog(CodedTool):
             return f"Error: Unknown action {action!r}. Use one of: {', '.join(InterviewLog.ACTIONS)}."
         if action == InterviewLog.START:
             return InterviewLog.start(args, sly_data)
-        return InterviewLog.advance(action, args, sly_data)
+        return InterviewLog.advance(action, args, sly_data, self.matcher)
 
     @staticmethod
     def start(args: dict[str, Any], sly_data: dict[str, Any]) -> dict[str, Any] | str:
@@ -139,13 +149,16 @@ class InterviewLog(CodedTool):
         return InterviewLog.respond(outcome)
 
     @staticmethod
-    def advance(action: str, args: dict[str, Any], sly_data: dict[str, Any]) -> dict[str, Any] | str:
+    def advance(
+        action: str, args: dict[str, Any], sly_data: dict[str, Any], matcher: ModelReplyMatcher | None
+    ) -> dict[str, Any] | str:
         """
         Apply an action to an interview already under way.
 
         :param action: The action, which is not "start".
         :param args: See invoke().
         :param sly_data: See invoke().
+        :param matcher: Reads free-text replies, or None for containment.
         :return: See invoke().
         """
         try:
@@ -162,7 +175,7 @@ class InterviewLog(CodedTool):
             reply: str = str(args.get("reply") or "")
             if not reply.strip():
                 return "Error: No reply given to record. Pass what the user said as 'reply'."
-            outcome: InterviewOutcome = InterviewRecorder.record(state, reply)
+            outcome: InterviewOutcome = InterviewRecorder.record(state, reply, matcher)
         elif action == InterviewLog.ASSUME:
             default: str = str(args.get("default") or "")
             if not default.strip():
@@ -201,7 +214,7 @@ class InterviewLog(CodedTool):
 
     async def async_invoke(self, args: dict[str, Any], sly_data: dict[str, Any]) -> dict[str, Any] | str:
         """
-        Runs invoke() in a worker thread, since "start" may read the pack from disk.
+        Runs invoke() in a worker thread, since "start" may read the pack from disk and "answer" may ask a model.
 
         :param args: See invoke().
         :param sly_data: See invoke().

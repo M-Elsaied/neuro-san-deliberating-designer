@@ -16,6 +16,7 @@
 
 from typing import Any
 from unittest import TestCase
+from unittest import mock
 
 from coded_tools.agent_network_designer.interview_entry import InterviewEntry
 from coded_tools.agent_network_designer.interview_factory import InterviewFactory
@@ -24,6 +25,7 @@ from coded_tools.agent_network_designer.interview_outcome import InterviewOutcom
 from coded_tools.agent_network_designer.interview_recorder import InterviewRecorder
 from coded_tools.agent_network_designer.interview_renderer import InterviewRenderer
 from coded_tools.agent_network_designer.interview_state import InterviewState
+from coded_tools.agent_network_designer.model_reply_matcher import ModelReplyMatcher
 from tests.coded_tools.agent_network_designer.interview_fixtures import InterviewFixtures
 
 
@@ -125,3 +127,16 @@ class TestInterviewRecorder(TestCase):
             (InterviewOutcome.COMPLETE, "", "Q4", ()),
             (outcome.status, outcome.prompt, outcome.entry.label, outcome.state.outstanding),
         )
+
+    def test_a_matcher_proposes_candidates_but_the_policy_decides(self) -> None:
+        """Two candidates are asked about, one is confirmed, none is an answer, and a number never reaches it."""
+        for candidates, status in {(self.CAB, self.DBA): "ambiguous", (self.CAB,): "confirm", (): "recorded"}.items():
+            with self.subTest(candidates=candidates):
+                matcher: Any = mock.Mock(spec=ModelReplyMatcher)
+                matcher.match.return_value = list(candidates)
+                outcome: InterviewOutcome = InterviewRecorder.record(
+                    InterviewFixtures.play().state, "the CAB one", matcher
+                )
+                self.assertEqual(status, outcome.status)
+        InterviewRecorder.record(InterviewFixtures.play().state, "2", matcher)
+        matcher.match.assert_called_once()
