@@ -98,11 +98,13 @@ why-clause is reported by validation.
 
 What each field is for:
 
-- **`version`, `owner`, `approved_by`, `effective_date`, `source`** — stamped into the generated
+- **`title`, `version`, `owner`, `approved_by`, `effective_date`** — stamped into the generated
   network, so an artifact states what it was built from and who stands behind it. A network of
   unknown ancestry is hard to defend in an audit.
+- **`summary`** — what `ListDomains` shows the designer when it matches a request to a domain.
+- **`source`** — free text for people reading the pack. The designer does not read it.
 - **`standard_id_pattern`** — your ids, not ours. `SOP-4.2.1`, `CTRL-0093`, `std-001`: whatever your
-  organisation already numbers its standards with. An id that reads like a standard but falls outside
+  organization already numbers its standards with. An id that reads like a standard but falls outside
   this pattern is **not loaded**, and validation reports it rather than letting the rule disappear.
 - **`roles`** — temporal role drives topology. Declaring it here takes the decision away from the
   language model and makes the resulting shape checkable.
@@ -163,7 +165,7 @@ Once a network is built from a pack, the pack's provenance line is written into 
     "metadata": {
         "sample_queries": [ ... ],
         "date_created": "2026-08-21T09:14:02+00:00",
-        "knowledge_pack": "Oracle database patching, v1.0.0, owned by Database Engineering"
+        "knowledge_pack": "Oracle database patching, v1.0.0, owned by Database Engineering, approved by Change Advisory Board, effective 2026-06-01"
     },
 ```
 
@@ -191,14 +193,8 @@ Exit code `0` if the network verifies clean, `1` if it does not, `2` on a usage 
 2. Write `operating_standards.md` — short, invariant, each rule with a stable id.
 3. Write `open_variables.md` — only what the requester alone can answer, each with its why.
 4. Write `pack.hocon` — version and owner at minimum, plus your id pattern if it is not `ABC-01`.
-5. Confirm it loads and validates:
-
-   ```python
-   from coded_tools.agent_network_designer.knowledge_pack import load_pack
-   print(load_pack("your_domain").validate())   # [] means clean
-   ```
-
-6. Ask the designer to build something in your domain, and read the verified coverage table.
+5. Ask the designer to build something in your domain, and read the verified coverage table. It lists
+   any pack errors and warnings under the table.
 
 No step edits Python or the designer's prompt. If one did, this would be an example rather than an
 extension point.
