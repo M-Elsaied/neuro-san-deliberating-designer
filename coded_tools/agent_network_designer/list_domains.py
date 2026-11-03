@@ -21,6 +21,7 @@ from typing import Any
 from neuro_san.interfaces.coded_tool import CodedTool
 
 from coded_tools.agent_network_designer.knowledge_pack import KnowledgePack
+from coded_tools.agent_network_designer.pack_catalog import PackCatalog
 from coded_tools.agent_network_designer.pack_reader import PackReader
 
 logger = logging.getLogger(__name__)
@@ -40,7 +41,7 @@ class ListDomains(CodedTool):
         :return: "domains", one entry per pack with its "id", "title", "summary", "version" and "standard_ids",
             and their "count"; or an "Error: ..." string when the deployment has no packs.
         """
-        packs: list[KnowledgePack] = PackReader.load_catalog()
+        packs: list[KnowledgePack] = PackCatalog.load_catalog()
         if not packs:
             return (
                 f"Error: No curated knowledge domains found under {PackReader.get_knowdocs_root()}. "

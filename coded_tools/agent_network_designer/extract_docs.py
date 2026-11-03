@@ -21,6 +21,7 @@ from typing import Any
 from neuro_san.interfaces.coded_tool import CodedTool
 
 from coded_tools.agent_network_designer.knowledge_pack import KnowledgePack
+from coded_tools.agent_network_designer.pack_catalog import PackCatalog
 from coded_tools.agent_network_designer.pack_reader import PackReader
 from coded_tools.agent_network_designer.pack_validator import PackValidator
 
@@ -50,7 +51,7 @@ class ExtractDocs(CodedTool):
         if not domain_id:
             return f"Error: No domain provided. Available curated domains: {PackReader.describe_domains()}"
         try:
-            pack: KnowledgePack = PackReader.load_pack(domain_id)
+            pack: KnowledgePack = PackCatalog.load_pack(domain_id)
         except FileNotFoundError:
             return (
                 f"""Error: No curated knowledge for domain "{domain_id}". """

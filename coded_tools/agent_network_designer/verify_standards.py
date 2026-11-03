@@ -21,6 +21,7 @@ from typing import Any
 from neuro_san.interfaces.coded_tool import CodedTool
 
 from coded_tools.agent_network_designer.knowledge_pack import KnowledgePack
+from coded_tools.agent_network_designer.pack_catalog import PackCatalog
 from coded_tools.agent_network_designer.pack_reader import PackReader
 from coded_tools.agent_network_designer.standards_verifier import StandardsVerifier
 from coded_tools.agent_network_designer.verification_report import VerificationReport
@@ -63,7 +64,7 @@ class VerifyStandards(CodedTool):
                 "Verification runs after the network has been built."
             )
         try:
-            pack: KnowledgePack = PackReader.load_pack(domain_id)
+            pack: KnowledgePack = PackCatalog.load_pack(domain_id)
         except FileNotFoundError as exception:
             return f"Error: {exception}. Available curated domains: {PackReader.describe_domains()}"
         except (OSError, ValueError) as exception:

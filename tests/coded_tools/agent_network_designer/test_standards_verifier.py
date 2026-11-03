@@ -307,6 +307,12 @@ class TestStandardsVerifier(TestCase):
                     "",
                     """No knowledge pack for domain "nowhere" under""",
                 ),
+                "unknown domain named against its own knowdocs": (
+                    [clean, "--domain", "nowhere", "--knowdocs", str(root / "knowdocs")],
+                    2,
+                    "",
+                    "\nAvailable curated domains: own_pack",
+                ),
                 "own knowdocs": (
                     [own, "--domain", "own_pack", "--knowdocs", str(root / "knowdocs")],
                     0,

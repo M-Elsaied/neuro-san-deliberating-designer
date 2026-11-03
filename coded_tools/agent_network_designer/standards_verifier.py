@@ -27,6 +27,7 @@ from pyparsing.exceptions import ParseBaseException
 
 from coded_tools.agent_network_designer.embedded_standard import EmbeddedStandard
 from coded_tools.agent_network_designer.knowledge_pack import KnowledgePack
+from coded_tools.agent_network_designer.pack_catalog import PackCatalog
 from coded_tools.agent_network_designer.pack_reader import PackReader
 from coded_tools.agent_network_designer.pack_validator import PackValidator
 from coded_tools.agent_network_designer.standard import Standard
@@ -244,13 +245,17 @@ class StandardsVerifier:
             description="Verify that a generated agent network carries its domain's operating standards."
         )
         parser.add_argument("network", help="path to a generated agent network .hocon file")
-        parser.add_argument(
-            "--domain", required=True, help=f"curated domain; available: {', '.join(PackReader.discover_domains())}"
-        )
+        # The domains are listed on the error path rather than in this help, so --help does not scan the packs.
+        parser.add_argument("--domain", required=True, help="curated domain to verify against")
         parser.add_argument("--knowdocs", default=None, help="override the knowdocs root")
         arguments: Namespace = parser.parse_args(argv)
         try:
-            pack: KnowledgePack = PackReader.load_pack(arguments.domain, arguments.knowdocs)
+            pack: KnowledgePack = PackCatalog.load_pack(arguments.domain, arguments.knowdocs)
+        except (OSError, ValueError) as exception:
+            available: str = PackReader.describe_domains(arguments.knowdocs)
+            print(f"Error: {exception}\nAvailable curated domains: {available}", file=sys.stderr)
+            return 2
+        try:
             definition: dict[str, Any] = StandardsVerifier.read_network_definition(arguments.network)
         except (OSError, ValueError) as exception:
             print(f"Error: {exception}", file=sys.stderr)

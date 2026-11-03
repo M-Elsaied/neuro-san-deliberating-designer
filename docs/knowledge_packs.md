@@ -38,6 +38,9 @@ To serve your own packs without touching this repository:
 export AGENT_NETWORK_DESIGNER_KNOWDOCS=/srv/agent-knowledge/packs
 ```
 
+The designer's tools read the packs once per process, and pick up an edited, added or removed pack
+without a restart. An explicit path, such as `--knowdocs`, is read directly and never cached.
+
 ---
 
 ## `operating_standards.md`
