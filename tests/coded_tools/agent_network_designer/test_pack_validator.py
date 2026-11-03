@@ -33,12 +33,10 @@ class TestPackValidator(TestCase):
     Tests for PackValidator.
     """
 
-    def test_the_shipped_packs_are_clean(self) -> None:
-        """
-        The packs that ship satisfy the format they document.
-        """
+    def test_every_pack_present_is_clean(self) -> None:
+        """Every pack under the default root is clean, including one a deployment added, so a bad one fails CI."""
         PackFixtures.use_knowdocs_root(self, None)
-        for domain_id in PackFixtures.SHIPPED_DOMAINS:
+        for domain_id in PackReader.discover_domains():
             with self.subTest(domain_id=domain_id):
                 pack: KnowledgePack = PackReader.load_pack(domain_id)
                 self.assertEqual([], PackValidator.get_errors(pack))
