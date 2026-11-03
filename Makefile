@@ -69,7 +69,9 @@ lint-check-source: venv-guard
 	ruff format $(SOURCES) $(RUFF_FORMAT_CHECK)
 	ruff check $(SOURCES) $(RUFF_LINT_CHECK)
 	pylint $(SOURCES)/
-	pymarkdown --config ./.pymarkdownlint.yaml scan ./docs ./README.md
+	# A knowledge pack is documentation too, and its markdown is read by a parser that only accepts one shape.
+	pymarkdown --config ./.pymarkdownlint.yaml scan ./docs ./README.md \
+		./coded_tools/agent_network_designer/knowdocs
 
 lint-check-tests: venv-guard
 	# Run format and lint checks via ruff, then pylint
@@ -81,7 +83,10 @@ lint-check: lint-check-source lint-check-tests
 
 lint: format lint-check
 
-test: lint ## Run tests with coverage
+validate-packs: venv-guard ## Check that every knowledge pack loads and validates
+	python -m coded_tools.agent_network_designer.pack_authoring validate --all
+
+test: lint validate-packs ## Run tests with coverage
 	python -m pytest tests/ -v --cov=coded_tools --cov=neuro_san_studio -m "not integration"
 
 test-integration: install
