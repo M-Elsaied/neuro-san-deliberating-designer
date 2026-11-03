@@ -26,6 +26,7 @@ https://admin.mistral.ai/
 # URLs whose base path is not browsable (returns 400 or 404)
 https://raw.githubusercontent.com/anthropics/skills/main/skills/internal-comms/
 https://api.anthropic.com/
+https://api.openai.com/v1/videos
 https://api.smith.langchain.com/
 https://api.salesforce.com
 
