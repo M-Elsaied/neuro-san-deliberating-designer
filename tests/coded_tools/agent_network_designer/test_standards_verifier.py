@@ -14,315 +14,307 @@
 #
 # END COPYRIGHT
 
-"""
-Unit tests for the standards verifier.
-
-Each test pins one way a generated network can silently fail to carry the standards it claims.
-No language model, no network, no agent runtime.
-"""
-
+import contextlib
+import io
+import json
+import os
+import tempfile
+from pathlib import Path
 from typing import Any
+from unittest import TestCase
 
-import pytest
-
+from coded_tools.agent_network_designer.embedded_standard import EmbeddedStandard
 from coded_tools.agent_network_designer.knowledge_pack import KnowledgePack
-from coded_tools.agent_network_designer.knowledge_pack import load_pack
-from coded_tools.agent_network_designer.standards_verifier import extract_embedded_standards
-from coded_tools.agent_network_designer.standards_verifier import network_definition_from_hocon
-from coded_tools.agent_network_designer.standards_verifier import render_report
-from coded_tools.agent_network_designer.standards_verifier import verify
+from coded_tools.agent_network_designer.pack_parser import PackParser
+from coded_tools.agent_network_designer.pack_reader import PackReader
+from coded_tools.agent_network_designer.standard import Standard
+from coded_tools.agent_network_designer.standards_verifier import StandardsVerifier
+from coded_tools.agent_network_designer.verification_result import VerificationResult
+from tests.coded_tools.agent_network_designer.pack_fixtures import PackFixtures
 
 
-@pytest.fixture(name="pack")
-def pack_fixture() -> KnowledgePack:
-    """:return: The Oracle reference pack."""
-    return load_pack("oracle_database_patching")
-
-
-def clean_network(pack: KnowledgePack) -> dict[str, Any]:
+class TestStandardsVerifier(TestCase):
     """
-    Build a network that embeds every standard exactly once, verbatim, in its own agent.
-
-    This is what a correct build looks like; every other fixture in this module is a mutation
-    of it.
-
-    :param pack: The pack to satisfy.
-    :return: An agent network definition.
+    Tests for StandardsVerifier, mostly as edits to a correctly built network for the Oracle reference pack.
     """
-    network: dict[str, Any] = {
-        "front_man": {"instructions": "You coordinate the patching run.", "tools": []},
-    }
-    for index, standard in enumerate(pack.standards, start=1):
-        network[f"agent_{index}"] = {
-            "instructions": f"You own one step.\nMUST: {standard.text} [{standard.standard_id}]\n",
-            "tools": [],
+
+    def setUp(self) -> None:
+        """
+        Load the Oracle pack and the network a correct build of it produces.
+        """
+        self.pack: KnowledgePack = PackFixtures.load_shipped_pack(self, "oracle_database_patching")
+        self.network: dict[str, Any] = PackFixtures.build_reference_network(self.pack)
+
+    def test_embedded_standards_are_found_with_their_agent(self) -> None:
+        """
+        Agents without instructions, such as coded tools, are skipped rather than crashed on.
+        """
+        network: dict[str, Any] = {
+            "backup_gate": {"instructions": "MUST: Take a backup. [ODB-03]"},
+            "validator": {"instructions": "Preamble.\nMUST: Check connectivity. [ODB-06]\nEpilogue."},
+            "coded_tool": {"class": "some.Tool"},
+            "empty": {"instructions": None},
+            "malformed": "not a definition",
         }
-    network["front_man"]["tools"] = [name for name in network if name != "front_man"]
-    return network
+        expected: list[EmbeddedStandard] = [
+            EmbeddedStandard("ODB-03", "Take a backup.", "backup_gate"),
+            EmbeddedStandard("ODB-06", "Check connectivity.", "validator"),
+        ]
+        self.assertEqual(expected, StandardsVerifier.extract_embedded_standards(network))
+        self.assertEqual([], StandardsVerifier.extract_embedded_standards(None))
 
+    def test_the_id_is_the_bracket_group_ending_the_line(self) -> None:
+        """
+        Brackets inside a standard's text and trailing whitespace do not hide or change its id.
+        """
+        network: dict[str, Any] = {"agent": {"instructions": "MUST: Read the README [and notes]. [ODB-05]   \nNext."}}
+        expected: EmbeddedStandard = EmbeddedStandard("ODB-05", "Read the README [and notes].", "agent")
+        self.assertEqual([expected], StandardsVerifier.extract_embedded_standards(network))
 
-# --------------------------------------------------------------------------------------
-# Extraction
-# --------------------------------------------------------------------------------------
+    def test_a_must_line_may_wrap_but_a_blank_line_ends_it(self) -> None:
+        """
+        The model writing instructions wraps long lines, but a paragraph break is not a wrap.
+        """
+        wrapped: dict[str, Any] = {"agent": {"instructions": "MUST: Take a backup,\nand confirm it. [ODB-03]"}}
+        broken: dict[str, Any] = {"agent": {"instructions": "MUST: A rule with no id\n\nLater prose. [ODB-01]"}}
+        expected: EmbeddedStandard = EmbeddedStandard("ODB-03", "Take a backup,\nand confirm it.", "agent")
+        self.assertEqual([expected], StandardsVerifier.extract_embedded_standards(wrapped))
+        self.assertEqual([], StandardsVerifier.extract_embedded_standards(broken))
 
+    def test_only_the_upper_case_marker_counts(self) -> None:
+        """
+        A lower-case "must:" is prose.
+        """
+        lower: dict[str, Any] = {"agent": {"instructions": "must: A rule. [ABC-01]"}}
+        upper: dict[str, Any] = {"agent": {"instructions": "You MUST: A rule. [ABC-01]"}}
+        self.assertEqual([], StandardsVerifier.extract_embedded_standards(lower))
+        self.assertEqual(1, len(StandardsVerifier.extract_embedded_standards(upper)))
 
-def test_embedded_standards_are_found_with_their_owning_agent():
-    """The owning agent is the whole point of the coverage check."""
-    network = {
-        "backup_gate": {"instructions": "MUST: Take a backup. [ODB-03]"},
-        "validator": {"instructions": "Preamble.\nMUST: Check connectivity. [ODB-06]\nEpilogue."},
-        "a_coded_tool": {"description": "no instructions here"},
-    }
-    embedded = extract_embedded_standards(network)
-    assert {(item.standard_id, item.agent_name) for item in embedded} == {
-        ("ODB-03", "backup_gate"),
-        ("ODB-06", "validator"),
-    }
+    def test_a_correct_build_of_every_shipped_pack_verifies_clean(self) -> None:
+        """
+        The baseline every other test edits.
+        """
+        for domain_id in PackFixtures.SHIPPED_DOMAINS:
+            with self.subTest(domain_id=domain_id):
+                pack: KnowledgePack = PackReader.load_pack(domain_id)
+                result: VerificationResult = StandardsVerifier.verify(pack, PackFixtures.build_reference_network(pack))
+                self.assertTrue(result.ok)
+                self.assertEqual(len(pack.standards), len(result.owners))
 
+    def test_a_dropped_standard_is_missing(self) -> None:
+        """
+        The failure a self-reported coverage table is least likely to admit.
+        """
+        dropped: Standard = self.pack.get_standard("ODB-03")
+        network: dict[str, Any] = PackFixtures.replace_in_network(
+            self.network, PackFixtures.get_must_line(dropped), ""
+        )
+        result: VerificationResult = StandardsVerifier.verify(self.pack, network)
+        self.assertFalse(result.ok)
+        self.assertEqual(["ODB-03"], result.missing)
 
-def test_a_standard_whose_text_contains_brackets_still_yields_the_right_id():
-    """The id is the trailing bracket group, not the first one."""
-    network = {"agent": {"instructions": "MUST: Review the README [and its notes] carefully. [ODB-05]"}}
-    embedded = extract_embedded_standards(network)
-    assert embedded[0].standard_id == "ODB-05"
-    assert embedded[0].text == "Review the README [and its notes] carefully."
+    def test_ownership_is_ambiguous_only_across_agents(self) -> None:
+        """
+        Two owning agents means neither is accountable; the same line twice in one agent is only untidy.
+        """
+        line: str = PackFixtures.get_must_line(self.pack.get_standard("ODB-01"))
+        across: dict[str, Any] = PackFixtures.append_to_agent(self.network, "coordinator", line)
+        within: dict[str, Any] = PackFixtures.replace_in_network(self.network, line, f"{line}\n{line}")
 
+        self.assertEqual(["ODB-01"], StandardsVerifier.verify(self.pack, across).ambiguous)
+        self.assertTrue(StandardsVerifier.verify(self.pack, within).ok)
 
-def test_a_wrapped_must_line_is_still_found():
-    """
-    The agent writing instructions is a language model and wraps long lines. If a wrapped
-    standard were missed, it would be reported as never embedded - sending a reviewer hunting
-    for a rule that is present and correct, which is worse than not checking at all.
-    """
-    network = {
-        "backup_gate": {
-            "instructions": (
-                "You own the backup gate.\n"
-                "MUST: Take a full RMAN backup before applying any patch, and confirm\n"
-                "the backup is restorable. [ODB-03]\n"
+    def test_an_invented_id_is_unknown(self) -> None:
+        """
+        A confident-looking rule under an id the pack does not define.
+        """
+        invented: str = "MUST: Always take two backups. [ODB-99]"
+        network: dict[str, Any] = PackFixtures.append_to_agent(self.network, "coordinator", invented)
+        result: VerificationResult = StandardsVerifier.verify(self.pack, network)
+        self.assertFalse(result.ok)
+        self.assertEqual([EmbeddedStandard("ODB-99", "Always take two backups.", "coordinator")], result.unknown)
+
+    def test_changed_text_is_an_infidelity(self) -> None:
+        """
+        A paraphrase or a dropped clause keeps the id but changes the rule.
+        """
+        standard: Standard = self.pack.get_standard("ODB-03")
+        edits: dict[str, str] = {
+            "paraphrased": "Take a backup before patching.",
+            "truncated": "Take a full RMAN backup before applying any patch.",
+        }
+        for name, text in edits.items():
+            with self.subTest(edit=name):
+                network: dict[str, Any] = PackFixtures.replace_in_network(self.network, standard.text, text)
+                result: VerificationResult = StandardsVerifier.verify(self.pack, network)
+                self.assertFalse(result.ok)
+                self.assertEqual(1, len(result.infidelities))
+                self.assertEqual("ODB-03", result.infidelities[0].get("standard_id"))
+                self.assertTrue(result.infidelities[0].get("detail").startswith("first differs at character"))
+
+    def test_rewrapping_and_typography_are_tolerated(self) -> None:
+        """
+        A model that re-wraps, indents or swaps in typographic punctuation has not changed the rule.
+        """
+        wrapped: str = self.pack.get_standard("ODB-03").text
+        hyphenated: str = self.pack.get_standard("ODB-05").text
+        network: dict[str, Any] = PackFixtures.replace_in_network(
+            self.network, wrapped, wrapped.replace(", ", ",\n    ")
+        )
+        network = PackFixtures.replace_in_network(network, hyphenated, "\u00a0" + hyphenated.replace("-", "\u2013"))
+        self.assertNotEqual(self.network, network)
+        self.assertTrue(StandardsVerifier.verify(self.pack, network).ok)
+
+    def test_a_gate_that_is_also_the_work_is_a_structural_problem(self) -> None:
+        """
+        An agent owning both a precondition and the work it guards has collapsed the gate.
+        """
+        pack: KnowledgePack = PackReader.load_pack("kubernetes_cluster_upgrade")
+        network: dict[str, Any] = PackFixtures.build_reference_network(pack)
+        gate: dict[str, Any] = network.pop("readiness_gate")
+        network = PackFixtures.append_to_agent(network, "operator", gate.get("instructions"))
+        result: VerificationResult = StandardsVerifier.verify(pack, network)
+        self.assertFalse(result.ok)
+        self.assertEqual(1, len(result.structural))
+        self.assertTrue(result.structural[0].startswith("agent 'operator' owns both a precondition and a work"))
+
+    def test_a_pack_without_roles_has_no_structure_to_check(self) -> None:
+        """
+        The structure check is opt-in through the manifest's roles.
+        """
+        pack: KnowledgePack = PackFixtures.build_pack([Standard("ABC-01", "One."), Standard("ABC-02", "Two.")])
+        network: dict[str, Any] = {"agent": {"instructions": "MUST: One. [ABC-01]\nMUST: Two. [ABC-02]"}}
+        self.assertTrue(StandardsVerifier.verify(pack, network).ok)
+
+    def test_a_pack_error_fails_an_otherwise_clean_network(self) -> None:
+        """
+        A network built perfectly from a pack that lost a standard on load does not carry the pack.
+        """
+        pack: KnowledgePack = PackFixtures.build_pack(
+            [Standard("ABC-01", "A rule.")],
+            unloaded=[{"standard_id": "WRONG-02", "reason": PackParser.UNLOADED_OFF_PATTERN}],
+        )
+        result: VerificationResult = StandardsVerifier.verify(
+            pack, {"agent": {"instructions": "MUST: A rule. [ABC-01]"}}
+        )
+        self.assertEqual([], result.missing + result.infidelities + result.unknown)
+        self.assertFalse(result.ok)
+        self.assertEqual(1, len(result.pack_errors))
+
+    def test_normalize_folds_rendering_but_not_a_changed_word(self) -> None:
+        """
+        The line between tolerated and reported.
+        """
+        self.assertEqual("take a full backup", StandardsVerifier.normalize("take a\n  full\u00a0 backup "))
+        self.assertEqual("don't - stop", StandardsVerifier.normalize("don\u2019t \u2014 stop"))
+        self.assertNotEqual(
+            StandardsVerifier.normalize("take a full backup"), StandardsVerifier.normalize("take a backup")
+        )
+        self.assertEqual("", StandardsVerifier.normalize(None))
+
+    def test_a_generated_file_is_read_relative_to_the_repository_root(self) -> None:
+        """
+        Generated networks include files relative to the repository root, as the server loads them, so the file
+        reads from the root and fails with a clear message from anywhere else.
+        """
+        with tempfile.TemporaryDirectory() as temporary:
+            root: Path = Path(temporary)
+            generated: Path = root / "registries" / "generated"
+            generated.mkdir(parents=True)
+            (root / "registries" / "aaosa.hocon").write_text("""{ aaosa_call = "shared" }\n""", encoding="utf-8")
+            network_path: Path = generated / "net.hocon"
+            network_path.write_text(
+                """{
+    include "registries/aaosa.hocon"
+    "tools": [
+        { "name": "gate", "call": ${aaosa_call}, "instructions": "MUST: A rule. [ABC-01]", "tools": ["x"] },
+        { "instructions": "An entry with no name is skipped." }
+    ]
+}
+""",
+                encoding="utf-8",
             )
-        }
-    }
-    embedded = extract_embedded_standards(network)
-    assert len(embedded) == 1
-    assert embedded[0].standard_id == "ODB-03"
-    assert "confirm" in embedded[0].text and "restorable" in embedded[0].text
+            self.addCleanup(os.chdir, os.getcwd())
+            os.chdir(root)
+            expected: dict[str, Any] = {"gate": {"instructions": "MUST: A rule. [ABC-01]", "tools": ["x"]}}
+            self.assertEqual(expected, StandardsVerifier.read_network_definition(network_path))
 
+            os.chdir(generated)
+            with self.assertRaisesRegex(ValueError, "relative to the repository root"):
+                StandardsVerifier.read_network_definition(network_path)
 
-def test_a_wrapped_standard_verifies_as_faithful(pack):
-    """Wrapping is a rendering artefact, not a change to the rule."""
-    standard = pack.standards[2]
-    wrapped: str = standard.text.replace(", and", ",\nand")
-    network = {"gate": {"instructions": f"MUST: {wrapped} [{standard.standard_id}]\n"}}
-    result = verify(pack, network)
-    assert not result.infidelities, result.infidelities
-    assert result.owners[standard.standard_id] == ["gate"]
+    def test_a_file_that_is_not_an_agent_network_is_rejected(self) -> None:
+        """
+        A wrong or missing file is an error, not a network with zero coverage.
+        """
+        with tempfile.TemporaryDirectory() as temporary:
+            notes: Path = Path(temporary) / "notes.hocon"
+            notes.write_text("""{ "something": "else" }\n""", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "does not look like an agent network"):
+                StandardsVerifier.read_network_definition(notes)
+            with self.assertRaisesRegex(ValueError, "Could not read"):
+                StandardsVerifier.read_network_definition(Path(temporary) / "missing.hocon")
+            malformed: dict[str, str] = {
+                "missing_include.hocon": """{ include required("nowhere.hocon")\n "tools": [{ "name": "a" }] }""",
+                "list_root.hocon": """[{ "name": "a" }]""",
+                "scalar_tools.hocon": """{ "tools": [1, 2] }""",
+            }
+            for file_name, content in malformed.items():
+                with self.subTest(file_name=file_name):
+                    malformed_path: Path = Path(temporary) / file_name
+                    malformed_path.write_text(content, encoding="utf-8")
+                    with self.assertRaises(ValueError):
+                        StandardsVerifier.read_network_definition(malformed_path)
 
+    @staticmethod
+    def write_network_file(path: Path, network: dict[str, Any]) -> Path:
+        """
+        Write a network as the generated .hocon file the command line reads.
 
-def test_a_blank_line_ends_a_must_paragraph():
-    """
-    A newline is treated as a wrap only within a paragraph. Without this bound, an unterminated
-    MUST line would swallow the rest of an agent's instructions looking for a bracket.
-    """
-    network = {
-        "agent": {
-            "instructions": "MUST: A rule with no id\n\nSome later prose. [ODB-01]\n",
-        }
-    }
-    assert not extract_embedded_standards(network)
+        :param path: Where to write it.
+        :param network: Agent name to definition.
+        :return: The path.
+        """
+        tools: list[dict[str, Any]] = []
+        for agent_name, agent in network.items():
+            tools.append({"name": agent_name, "instructions": agent.get("instructions")})
+        # HOCON is a superset of JSON, so the generated file can be written as JSON.
+        path.write_text(json.dumps({"tools": tools}), encoding="utf-8")
+        return path
 
-
-def test_an_empty_network_extracts_nothing():
-    """Guards the verifier against being called before anything was built."""
-    assert not extract_embedded_standards({})
-
-
-# --------------------------------------------------------------------------------------
-# The three properties
-# --------------------------------------------------------------------------------------
-
-
-def test_a_correctly_built_network_verifies_clean(pack):
-    """The happy path must be reachable, or every other assertion is meaningless."""
-    result = verify(pack, clean_network(pack))
-    assert result.ok, result.problems()
-    assert not result.missing
-    assert len(result.owners) == len(pack.standards)
-
-
-def test_coverage_catches_a_standard_that_reached_no_agent(pack):
-    """The failure the self-reported table is least likely to admit to."""
-    network = clean_network(pack)
-    del network["agent_3"]
-    result = verify(pack, network)
-    assert not result.ok
-    assert "ODB-03" in result.missing
-    assert any("ODB-03 is not embedded" in problem for problem in result.problems())
-
-
-def test_coverage_catches_a_standard_owned_by_two_agents(pack):
-    """Two owners means neither is accountable."""
-    network = clean_network(pack)
-    network["duplicate_owner"] = {"instructions": f"MUST: {pack.standards[0].text} [ODB-01]"}
-    result = verify(pack, network)
-    assert not result.ok
-    assert "ODB-01" in result.ambiguous
-    assert any("more than one agent" in problem for problem in result.problems())
-
-
-def test_provenance_catches_an_invented_standard(pack):
-    """
-    The build-time version of the pizza failure: a confident-looking rule with an id that does
-    not exist. Nothing in the current design would notice this.
-    """
-    network = clean_network(pack)
-    network["over_eager"] = {"instructions": "MUST: Always take two backups. [ODB-07]"}
-    result = verify(pack, network)
-    assert not result.ok
-    assert [item.standard_id for item in result.unknown] == ["ODB-07"]
-    assert any("not a standard in this pack" in problem for problem in result.problems())
-
-
-def test_fidelity_catches_a_paraphrased_standard(pack):
-    """
-    The failure mode the whole verbatim-embedding design exists to prevent, and the one a human
-    skimming the generated file would not spot.
-    """
-    network = clean_network(pack)
-    network["agent_3"]["instructions"] = "MUST: Take a backup before patching. [ODB-03]"
-    result = verify(pack, network)
-    assert not result.ok
-    assert [mismatch["standard_id"] for mismatch in result.infidelities] == ["ODB-03"]
-    assert "first differs at character" in result.infidelities[0]["detail"]
-
-
-def test_fidelity_catches_a_dropped_trailing_clause(pack):
-    """Truncation is the most plausible real-world infidelity."""
-    network = clean_network(pack)
-    network["agent_3"]["instructions"] = "MUST: Take a full RMAN backup before applying any patch. [ODB-03]"
-    result = verify(pack, network)
-    assert not result.ok
-    assert result.infidelities
-
-
-def test_fidelity_tolerates_rewrapping_and_smart_punctuation(pack):
-    """
-    A model that re-wraps a line or swaps a hyphen for an en dash has not altered the rule. If
-    these were reported, every build would fail and the check would be ignored.
-    """
-    network = clean_network(pack)
-    standard = pack.standards[2]
-    rewrapped: str = standard.text.replace(" ", "\n   ", 1).replace("-", "–")
-    network["agent_3"]["instructions"] = f"MUST: {rewrapped} [{standard.standard_id}]"
-    result = verify(pack, network)
-    assert not result.infidelities, result.infidelities
-
-
-# --------------------------------------------------------------------------------------
-# Structure
-# --------------------------------------------------------------------------------------
-
-
-def test_structure_catches_a_gate_that_is_also_the_work():
-    """
-    Temporal role is what turns knowledge into topology. An agent owning both a precondition and
-    the work it guards has collapsed the gate, which the text checks alone cannot see.
-    """
-    pack: KnowledgePack = load_pack("kubernetes_cluster_upgrade")
-    network: dict[str, Any] = {}
-    for standard in pack.standards:
-        # K8S-02 is a precondition, K8S-05 is work: put both in one agent.
-        agent_name: str = "everything_agent" if standard.standard_id in ("K8S-02", "K8S-05") else standard.standard_id
-        existing: str = network.get(agent_name, {}).get("instructions", "")
-        network[agent_name] = {
-            "instructions": f"{existing}\nMUST: {standard.text} [{standard.standard_id}]",
-        }
-    result = verify(pack, network)
-    assert not result.ok
-    assert any("does not gate anything" in problem for problem in result.problems())
-
-
-def test_structure_is_skipped_for_packs_that_declare_no_roles(tmp_path):
-    """The structural check is opt-in, so packs without roles are unaffected."""
-    directory = tmp_path / "roleless"
-    directory.mkdir()
-    (directory / "operating_standards.md").write_text("- RL-01: One.\n- RL-02: Two.\n", encoding="utf-8")
-    (directory / "open_variables.md").write_text("- V1 | q | examples: e | why: w\n", encoding="utf-8")
-    (directory / "pack.hocon").write_text(
-        '{ domain_id = "roleless"\n version = "1.0"\n standard_id_pattern = "RL-\\\\d{2}" }\n', encoding="utf-8"
-    )
-    pack = load_pack("roleless", tmp_path)
-    network = {"one_agent": {"instructions": "MUST: One. [RL-01]\nMUST: Two. [RL-02]"}}
-    result = verify(pack, network)
-    assert not result.structural
-
-
-# --------------------------------------------------------------------------------------
-# Reporting
-# --------------------------------------------------------------------------------------
-
-
-def test_report_renders_a_table_for_a_clean_network(pack):
-    """The report replaces a table the model would otherwise write about its own work."""
-    report: str = render_report(verify(pack, clean_network(pack)))
-    assert "| Standard | Role | Owned by | Fidelity |" in report
-    assert "**ODB-03**" in report
-    assert "verbatim" in report
-    assert "Every standard is embedded exactly once" in report
-
-
-def test_report_names_every_failure(pack):
-    """A partial, honest report is more useful than an exception."""
-    network = clean_network(pack)
-    del network["agent_1"]
-    network["agent_3"]["instructions"] = "MUST: Take a backup. [ODB-03]"
-    network["invented"] = {"instructions": "MUST: Do something extra. [ODB-99]"}
-    report: str = render_report(verify(pack, network))
-    assert "did not verify clean" in report
-    assert "ODB-01 is not embedded" in report
-    assert "FIDELITY: ODB-03" in report
-    assert "ODB-99" in report
-    assert "**not embedded**" in report
-
-
-def test_report_carries_pack_provenance(pack):
-    """A generated network of unknown ancestry is hard to defend in an audit."""
-    report: str = render_report(verify(pack, clean_network(pack)))
-    assert "Oracle database patching" in report
-    assert "v1.0.0" in report
-
-
-# --------------------------------------------------------------------------------------
-# Offline use
-# --------------------------------------------------------------------------------------
-
-
-def test_a_generated_hocon_file_can_be_verified_offline(tmp_path, pack):
-    """
-    The same checks must run in CI over files already on disk, with no agent runtime and no
-    API key.
-    """
-    standard = pack.standards[2]
-    generated = tmp_path / "generated.hocon"
-    generated.write_text(
-        "{\n"
-        '    "tools": [\n'
-        '        { "name": "front_man", "instructions": "Coordinate.", "tools": ["backup_gate"] },\n'
-        f'        {{ "name": "backup_gate", "instructions": "MUST: {standard.text} [{standard.standard_id}]" }}\n'
-        "    ]\n"
-        "}\n",
-        encoding="utf-8",
-    )
-    definition = network_definition_from_hocon(generated)
-    assert set(definition) == {"front_man", "backup_gate"}
-    result = verify(pack, definition)
-    assert "ODB-03" in result.owners
-    assert result.owners["ODB-03"] == ["backup_gate"]
-
-
-def test_a_file_that_is_not_an_agent_network_is_rejected(tmp_path):
-    """Fail with a clear message rather than reporting zero coverage on a wrong file."""
-    not_a_network = tmp_path / "notes.hocon"
-    not_a_network.write_text('{ "something": "else" }\n', encoding="utf-8")
-    with pytest.raises(ValueError, match="does not look like an agent network"):
-        network_definition_from_hocon(not_a_network)
+    def test_the_command_line_prints_the_report_and_exits_with_the_outcome(self) -> None:
+        """
+        The report goes to stdout with exit 0 when clean and 1 when not; a usage error goes to stderr with exit 2.
+        """
+        with tempfile.TemporaryDirectory() as temporary:
+            root: Path = Path(temporary)
+            clean: str = str(self.write_network_file(root / "clean.hocon", self.network))
+            broken: str = str(self.write_network_file(root / "broken.hocon", {"agent": {"instructions": "None."}}))
+            own: str = str(
+                self.write_network_file(root / "own.hocon", {"agent": {"instructions": "MUST: A. [ABC-01]"}})
+            )
+            PackFixtures.write_pack(root / "knowdocs", "own_pack", "- ABC-01: A.\n")
+            cases: dict[str, tuple[list[str], int, str, str]] = {
+                "clean": ([clean, "--domain", self.pack.domain_id], 0, "Every standard is embedded exactly once", ""),
+                "failed": ([broken, "--domain", self.pack.domain_id], 1, "COVERAGE: ODB-01 is not embedded", ""),
+                "unknown domain": (
+                    [clean, "--domain", "nowhere"],
+                    2,
+                    "",
+                    """No knowledge pack for domain "nowhere" under""",
+                ),
+                "own knowdocs": (
+                    [own, "--domain", "own_pack", "--knowdocs", str(root / "knowdocs")],
+                    0,
+                    "| **ABC-01** | - | `agent` | verbatim |",
+                    "",
+                ),
+            }
+            for case, (argv, exit_code, expected_out, expected_err) in cases.items():
+                with self.subTest(case=case):
+                    stdout: io.StringIO = io.StringIO()
+                    stderr: io.StringIO = io.StringIO()
+                    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                        self.assertEqual(exit_code, StandardsVerifier.main(argv))
+                    self.assertIn(expected_out, stdout.getvalue())
+                    self.assertIn(expected_err, stderr.getvalue())
