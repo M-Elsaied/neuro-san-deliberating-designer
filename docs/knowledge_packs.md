@@ -148,6 +148,11 @@ work.
 Failures are reported, not raised — a network covering five of six standards with one flagged is more
 useful than an exception. Pass `strict` to make a failure an error instead.
 
+**What blocks saving a network.** A standard that was paraphrased, or an id the pack does not define, is
+sent back to be corrected, and if it still cannot be reproduced within the retry budget the network is
+not written. Neither is a judgment call. Missing coverage, ambiguous ownership and topology are logged
+but never block. Set `AGENT_NETWORK_DESIGNER_ENFORCE_STANDARDS=false` to make saving advisory again.
+
 ### Errors and warnings
 
 Pack problems come in two severities, and the line between them decides whether verification fails:
