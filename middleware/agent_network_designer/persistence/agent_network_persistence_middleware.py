@@ -26,7 +26,11 @@ from langgraph.runtime import Runtime
 from neuro_san.interfaces.reservationist import Reservationist
 from neuro_san.internals.validation.network.unreachable_nodes_network_validator import UnreachableNodesNetworkValidator
 
-from coded_tools.agent_network_designer.knowledge_pack import PACK_PROVENANCE
+from coded_tools.agent_network_designer.knowledge_pack import KnowledgePack
+from coded_tools.agent_network_designer.network_audit import NetworkAudit
+from coded_tools.agent_network_designer.pack_catalog import PackCatalog
+from coded_tools.agent_network_designer.standards_verifier import StandardsVerifier
+from coded_tools.agent_network_designer.verification_result import VerificationResult
 from coded_tools.agent_network_editor.and_logger import AndLogger
 from coded_tools.agent_network_editor.connectivity_dictionary_converter import ConnectivityDictionaryConverter
 from coded_tools.agent_network_editor.constants import AGENT_NETWORK_DEFINITION
@@ -56,6 +60,10 @@ DEMO_MODE: bool = environ.get("AGENT_NETWORK_DESIGNER_DEMO_MODE", "true").lower(
 
 # Subdirectory under registries directory where networks are saved when using file persistence.
 SUBDIRECTORY: str = environ.get("AGENT_NETWORK_DESIGNER_SUBDIRECTORY", DEFAULT_SUBDIRECTORY)
+
+# Whether a network with a paraphrased standard or an invented standard id is refused rather than persisted.
+# Incomplete coverage only logs a warning, since a network carrying five of six standards is still useful.
+ENFORCE_STANDARDS: bool = environ.get("AGENT_NETWORK_DESIGNER_ENFORCE_STANDARDS", "true").lower() == "true"
 
 # Default number of validation retry rounds when the env var is unset or unparseable.
 DEFAULT_MAX_VALIDATION_ATTEMPTS: int = 3
@@ -241,7 +249,57 @@ class AgentNetworkPersistenceMiddleware(AgentMiddleware):
         instructions_errors: list[str] = await AgentNetworkInstructionsValidationMiddleware(self.sly_data).validate(
             network_def
         )
+        # A paraphrased standard is wrong words in an agent's instructions, so it travels the same repair loop.
+        instructions_errors.extend(self._get_standards_errors(network_def))
         return structure_errors, instructions_errors
+
+    def _get_standards_errors(self, network_def: dict[str, Any]) -> list[str]:
+        """
+        Check that the curated standards reached the network faithfully, from the pack its ids identify.
+
+        :param network_def: The network definition about to be persisted.
+        :return: One error per paraphrased standard, invented id or pack error, addressed to the instructions
+            editor. Empty when enforcement is off or the network embeds no curated standard.
+        """
+        if not ENFORCE_STANDARDS:
+            return []
+        try:
+            packs: list[KnowledgePack] = PackCatalog.load_catalog()
+        except OSError as exception:
+            # An unreadable knowdocs root must not stop a network being built.
+            self.logger.warning("Could not check standards, so not enforcing them: %s", exception)
+            return []
+        pack: KnowledgePack | None = NetworkAudit.identify_pack(
+            StandardsVerifier.extract_embedded_standards(network_def), packs
+        )
+        if pack is None:
+            # A network designed on general knowledge is allowed, and is reported to the user as unverified.
+            return []
+
+        result: VerificationResult = StandardsVerifier.verify(pack, network_def)
+        errors: list[str] = []
+        for infidelity in result.infidelities:
+            errors.append(
+                f"Standard {infidelity.get('standard_id')} in agent '{infidelity.get('agent_name')}' does not match "
+                f"the curated document. It must be reproduced word for word. {infidelity.get('detail')} "
+                f"Call `agent_network_instructions_editor` to restore the exact wording."
+            )
+        for unknown in result.unknown:
+            errors.append(
+                f"Agent '{unknown.agent_name}' carries the standard id {unknown.standard_id}, which the "
+                f"{pack.domain_id} pack does not define. Remove it, or replace it with a real standard - "
+                f"a rule with no source is worse than no rule."
+            )
+        for problem in result.pack_errors:
+            errors.append(f"The curated pack itself did not load soundly, so this network cannot carry it: {problem}")
+        if result.missing or result.ambiguous or result.structural:
+            self.logger.warning(
+                "Standards coverage is incomplete but not blocking: missing=%s ambiguous=%s structural=%s",
+                result.missing,
+                result.ambiguous,
+                result.structural,
+            )
+        return errors
 
     async def _assemble_and_persist(
         self,
@@ -277,7 +335,7 @@ class AgentNetworkPersistenceMiddleware(AgentMiddleware):
 
         # Provenance of the curated knowledge pack this network was designed from, recorded by
         # ExtractDocs. Empty for networks built without a pack, in which case nothing is stamped.
-        pack_provenance: str = self.sly_data.get(PACK_PROVENANCE) or ""
+        pack_provenance: str = self.sly_data.get(KnowledgePack.PROVENANCE_KEY) or ""
 
         # Always assemble and store HOCON content for client consumption.
         persisted_content: str = await HoconAgentNetworkAssembler(DEMO_MODE).assemble_agent_network(

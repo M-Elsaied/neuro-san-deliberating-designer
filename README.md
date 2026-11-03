@@ -39,6 +39,12 @@ Ports already taken? `ns run --nsflow-port 4174 --server-http-port 8081`.
 
 - **It deliberates first.** Curated knowledge for the domain is retrieved, then you are interviewed one
   question at a time. Nothing is built until you approve.
+- **Questions are numbered choices, and you can go back.** Each question lists the pack's own example
+  answers plus *something else* and *not sure*. An answer that fits two options is asked about, not guessed,
+  and *go back*, `back three` or `change question 3` reopens an earlier answer without losing the others.
+  With no pack the designer derives the questions and runs the same interview, marked `curated: false`.
+- **The interview is state, not memory.** The questions, answers and position live in the `InterviewLog`
+  coded tool rather than in the model's context, so labels never shift and `back three` lands three back.
 - **Knowledge lives in documents, not in the prompt.** Each domain is a folder - a *knowledge pack* - under
   `coded_tools/agent_network_designer/knowdocs/<domain>/`, read by the `ExtractDocs` coded tool. Packs are
   discovered by scanning that root, so adding a domain is dropping a folder in; point
@@ -47,7 +53,8 @@ Ports already taken? `ns run --nsflow-port 4174 --server-http-port 8081`.
 - **It ends with a design brief** that separates confirmed requirements from flagged assumptions.
 - **Standards stay traceable, and the trace is checked.** Each one appears in its owning agent as
   `MUST: <text> [<id>]`, and the closing coverage table is *computed* by `VerifyStandards` rather than
-  written by the model about its own work. See [knowledge packs](docs/knowledge_packs.md).
+  written by the model about its own work. See [knowledge packs](docs/knowledge_packs.md) and
+  [the deliberation interview](docs/deliberation_interview.md).
 
 | Domain | `app_name` | Standard ids |
 |---|---|---|
@@ -78,7 +85,8 @@ quoted verbatim (*take a full RMAN backup before applying any patch*) - it is **
 knowledge varies per instance and only the requester has it (*RAC or single instance?*) - it is
 **elicited**, one question per turn. Open variables are written as
 `id | question | example answers | why it changes the design`, so the shell can justify a question it does
-not itself understand.
+not itself understand - and the example answers become the numbered options you pick from, which is what
+makes an under-specified answer visible rather than something the model has to guess past.
 
 **Temporal role determines topology.** This is the rule that turns knowledge into architecture, and it is
 domain-neutral:
@@ -110,11 +118,12 @@ and the claim fails.
 
 ### Known limits
 
-1. **A `MUST:` line is still not a runtime control.** `VerifyStandards` now checks that a standard
-   *survived into the artifact*, verbatim and attributed. It cannot make the generated network obey its own
-   `MUST` once that network runs - that needs deterministic tooling in the built agents themselves.
-   Verification is also advisory by default: it reports, and the network is still written.
-2. **A valid pack is not a correct pack.** A manifest and `validate()` catch malformed packs -
+1. **A `MUST:` line is still not a runtime control.** `VerifyStandards` checks that a standard
+   *survived into the artifact*, verbatim and attributed, and a network whose standards were paraphrased
+   or invented is sent back to be corrected, and is not persisted if it cannot be. That is build-time
+   enforcement: nothing makes the generated network obey its own `MUST` once it runs, which needs
+   deterministic tooling in the built agents themselves. Coverage stays advisory.
+2. **A valid pack is not a correct pack.** A manifest and pack validation catch malformed packs -
    duplicate ids, ids outside the declared pattern, a standard with no text, a missing `why` - and the
    pack's provenance is stamped into the generated network's `metadata`. Nothing checks that what a
    pack *says* is right, so a well-formed wrong pack still yields an authoritative-looking wrong
@@ -205,6 +214,8 @@ coded_tools/agent_network_designer/knowdocs/<your_domain>/
 Copy an existing set for the shape. Domains are discovered by scanning the root, so there is no Python to
 edit and no prompt to edit - the designer asks `ListDomains` what exists rather than being told. Set
 `AGENT_NETWORK_DESIGNER_KNOWDOCS` to serve packs from outside the repository entirely.
+
+Check it with `python -m coded_tools.agent_network_designer.pack_authoring validate --domain <your_domain>`.
 
 Keep packs short: documents are returned whole, so they are standards and open variables, not manuals.
 [docs/knowledge_packs.md](docs/knowledge_packs.md) has the field-by-field format and a checklist.
