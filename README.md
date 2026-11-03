@@ -114,7 +114,7 @@ and the claim fails.
    *survived into the artifact*, verbatim and attributed. It cannot make the generated network obey its own
    `MUST` once that network runs - that needs deterministic tooling in the built agents themselves.
    Verification is also advisory by default: it reports, and the network is still written.
-2. **A valid pack is not a correct pack.** A manifest and `validate()` catch malformed packs -
+2. **A valid pack is not a correct pack.** A manifest and pack validation catch malformed packs -
    duplicate ids, ids outside the declared pattern, a standard with no text, a missing `why` - and the
    pack's provenance is stamped into the generated network's `metadata`. Nothing checks that what a
    pack *says* is right, so a well-formed wrong pack still yields an authoritative-looking wrong
