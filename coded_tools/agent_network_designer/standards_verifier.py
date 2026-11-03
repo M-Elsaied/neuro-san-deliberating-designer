@@ -191,35 +191,58 @@ class StandardsVerifier:
     @staticmethod
     def read_network_definition(path: str | Path) -> dict[str, Any]:
         """
-        Read a generated network file, so networks already on disk can be verified offline. The text is parsed
-        relative to the working directory, as the server loads it, because a generated network's includes are
-        relative to the repository root rather than to the file itself.
+        Read a generated network file, so networks already on disk can be verified offline.
 
         :param path: A generated agent network .hocon file.
         :return: Agent name to a definition carrying its "instructions" and "tools".
         :raises ValueError: If the file cannot be read or parsed, or is not an agent network.
+        """
+        return StandardsVerifier.get_network_definition(StandardsVerifier.read_network_config(path), path)
+
+    @staticmethod
+    def read_network_config(path: str | Path) -> Any:
+        """
+        Read and parse a generated network file. The text is parsed relative to the working directory, as the
+        server loads it, because a generated network's includes are relative to the repository root rather than
+        to the file itself.
+
+        :param path: A generated agent network .hocon file.
+        :return: The parsed HOCON.
+        :raises ValueError: If the file cannot be read or parsed.
         """
         try:
             content: str = Path(path).read_text(encoding="utf-8")
         except OSError as exception:
             raise ValueError(f"Could not read {path}: {exception}") from exception
         try:
-            config: Any = ConfigFactory.parse_string(content)
+            return ConfigFactory.parse_string(content)
         except (ConfigException, ParseBaseException, OSError) as exception:
             raise ValueError(
                 f"Could not parse {path}: {PackReader.describe_parse_error(exception)}. "
                 f"A network's includes are relative to the repository root, so run this from there."
             ) from exception
 
+    @staticmethod
+    def get_network_definition(config: Any, path: str | Path, require_tools: bool = True) -> dict[str, Any]:
+        """
+        Turn a parsed network file's agent list into the definition the checks read.
+
+        :param config: The parsed HOCON.
+        :param path: The file it came from, for the error message.
+        :param require_tools: Whether a file declaring no agents is an error rather than an empty definition.
+        :return: Agent name to a definition carrying its "instructions" and "tools".
+        :raises ValueError: If the file is not a HOCON object, declares no tools when they are required, or has an
+            entry that is not an object.
+        """
         try:
             tools: Any = config.get("tools", None)
         except AttributeError as exception:
             raise ValueError(f"{path} is not a HOCON object; it does not look like an agent network.") from exception
-        if not tools:
+        if not tools and require_tools:
             raise ValueError(f"{path} declares no tools; it does not look like an agent network.")
         definition: dict[str, Any] = {}
         try:
-            for entry in tools:
+            for entry in tools or []:
                 agent: dict[str, Any] = dict(entry)
                 name: str = str(agent.get("name", "")).strip()
                 if name:

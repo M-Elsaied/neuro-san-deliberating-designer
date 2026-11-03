@@ -16,7 +16,6 @@
 
 import contextlib
 import io
-import json
 import os
 import tempfile
 from pathlib import Path
@@ -270,32 +269,18 @@ class TestStandardsVerifier(TestCase):
                     with self.assertRaises(ValueError):
                         StandardsVerifier.read_network_definition(malformed_path)
 
-    @staticmethod
-    def write_network_file(path: Path, network: dict[str, Any]) -> Path:
-        """
-        Write a network as the generated .hocon file the command line reads.
-
-        :param path: Where to write it.
-        :param network: Agent name to definition.
-        :return: The path.
-        """
-        tools: list[dict[str, Any]] = []
-        for agent_name, agent in network.items():
-            tools.append({"name": agent_name, "instructions": agent.get("instructions")})
-        # HOCON is a superset of JSON, so the generated file can be written as JSON.
-        path.write_text(json.dumps({"tools": tools}), encoding="utf-8")
-        return path
-
     def test_the_command_line_prints_the_report_and_exits_with_the_outcome(self) -> None:
         """
         The report goes to stdout with exit 0 when clean and 1 when not; a usage error goes to stderr with exit 2.
         """
         with tempfile.TemporaryDirectory() as temporary:
             root: Path = Path(temporary)
-            clean: str = str(self.write_network_file(root / "clean.hocon", self.network))
-            broken: str = str(self.write_network_file(root / "broken.hocon", {"agent": {"instructions": "None."}}))
+            clean: str = str(PackFixtures.write_network_file(root / "clean.hocon", self.network))
+            broken: str = str(
+                PackFixtures.write_network_file(root / "broken.hocon", {"agent": {"instructions": "None."}})
+            )
             own: str = str(
-                self.write_network_file(root / "own.hocon", {"agent": {"instructions": "MUST: A. [ABC-01]"}})
+                PackFixtures.write_network_file(root / "own.hocon", {"agent": {"instructions": "MUST: A. [ABC-01]"}})
             )
             PackFixtures.write_pack(root / "knowdocs", "own_pack", "- ABC-01: A.\n")
             cases: dict[str, tuple[list[str], int, str, str]] = {

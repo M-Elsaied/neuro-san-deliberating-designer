@@ -192,6 +192,20 @@ Exit code `0` if the network verifies clean, `1` if it does not, `2` on a usage 
 
 ---
 
+## Auditing the networks already generated
+
+A pack can change after a network is built from it. The audit checks a directory of generated networks
+against the packs as they are now, matching each to its pack by the ids it embeds, and exits `1` when one
+is `stale` (built from an older version), `drifted` (a standard's text no longer matches, whatever the
+version says) or belongs to an `unknown pack`. A network with no recorded version is reported as
+`unstamped` but not flagged. Add `--standard ODB-03` or `--pack <domain>` to list what implements either.
+
+```bash
+python -m coded_tools.agent_network_designer.network_audit registries/generated/
+```
+
+---
+
 ## Checklist for a new pack
 
 1. `mkdir <knowdocs root>/<your_domain>`

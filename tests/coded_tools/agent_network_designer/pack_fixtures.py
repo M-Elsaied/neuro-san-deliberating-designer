@@ -15,6 +15,7 @@
 # END COPYRIGHT
 
 import copy
+import json
 import os
 from pathlib import Path
 from typing import Any
@@ -112,6 +113,26 @@ class PackFixtures:
         if manifest is not None:
             (directory / PackReader.MANIFEST_FILENAME).write_text(manifest, encoding="utf-8")
         return directory
+
+    @staticmethod
+    def write_network_file(path: Path, network: dict[str, Any], metadata: dict[str, str] | None = None) -> Path:
+        """
+        Write a network as the generated .hocon file the command line tools read.
+
+        :param path: Where to write it.
+        :param network: Agent name to definition.
+        :param metadata: The network's metadata block, or None to leave it out.
+        :return: The path.
+        """
+        tools: list[dict[str, Any]] = []
+        for agent_name, agent in network.items():
+            tools.append({"name": agent_name, "instructions": agent.get("instructions")})
+        content: dict[str, Any] = {"tools": tools}
+        if metadata is not None:
+            content["metadata"] = metadata
+        # HOCON is a superset of JSON, so the generated file can be written as JSON.
+        path.write_text(json.dumps(content), encoding="utf-8")
+        return path
 
     @staticmethod
     def get_must_line(standard: Standard) -> str:
