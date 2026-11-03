@@ -30,8 +30,20 @@ class PackParser:
     # Reasons a bullet that reads as a standard was not loaded. Each completes "<id> reads as a standard but ...".
     UNLOADED_OFF_PATTERN: str = "its id falls outside the pack's declared standard_id_pattern"
     UNLOADED_NO_TEXT: str = "it has no text after the id"
+    UNLOADED_BAD_SEPARATOR: str = "its id is not followed by a colon or a full stop"
+    UNLOADED_NOT_A_BULLET: str = "it is not written as a markdown bullet starting with '- '"
+    # The shape a standard must take to load, quoted in the messages about rules that did not.
+    EXPECTED_STANDARD_SHAPE: str = "- <ID>: <the rule, word for word>"
 
     BULLET_RE: re.Pattern = re.compile(r"^\s*[-*]\s+")
+    # Something that reads as a standard, whatever the pack's own pattern: a PREFIX-number id, then its text.
+    CANDIDATE_RE: re.Pattern = re.compile(rf"^({PackManifest.DEFAULT_STANDARD_ID_PATTERN})\s*[:.]\s*(.*)$", re.DOTALL)
+    # An unmistakable id followed by something other than a colon or a full stop: a typo, not prose.
+    BAD_SEPARATOR_RE: re.Pattern = re.compile(
+        rf"^({PackManifest.DEFAULT_STANDARD_ID_PATTERN})\s*[^\s:.].*$", re.DOTALL
+    )
+    # A numbered list prefix such as "1. ", stripped so "1. ABC-01: text" is seen as an attempted standard.
+    NUMBERED_PREFIX_RE: re.Pattern = re.compile(r"^\s*\d+[.)]\s+")
 
     @staticmethod
     def parse_standards(text: str, id_pattern: str, roles: dict[str, str] | None = None) -> list[Standard]:
@@ -60,28 +72,82 @@ class PackParser:
     @staticmethod
     def find_unloaded_standards(text: str, id_pattern: str) -> list[dict[str, str]]:
         """
-        Find bullets that read as a standard but that parse_standards() drops, so a rule cannot vanish silently.
+        Find lines that read as a standard but that parse_standards() drops, so a rule cannot vanish silently.
         Only ids shaped like PREFIX-number count, so prose such as "Note: ..." is not mistaken for a standard.
 
         :param text: The operating_standards.md text.
         :param id_pattern: The pack's declared standard id pattern.
-        :return: One entry per dropped bullet, in document order, with "standard_id" and "reason" keys.
+        :return: One entry per dropped bullet, then per id-bearing line that is not a bullet, each with
+            "standard_id" and "reason" keys.
         """
-        candidate_re: re.Pattern = re.compile(
-            rf"^({PackManifest.DEFAULT_STANDARD_ID_PATTERN})\s*[:.]\s*(.*)$", re.DOTALL
-        )
         declared_re: re.Pattern = PackParser.compile_with_fallback("^(?:{})$", id_pattern)
         unloaded: list[dict[str, str]] = []
+        seen: set[str] = set()
         for bullet in PackParser.get_bullets(text):
-            match: re.Match | None = candidate_re.match(bullet.strip())
+            stripped: str = bullet.strip()
+            match: re.Match | None = PackParser.CANDIDATE_RE.match(stripped)
             if match is None:
+                separator_match: re.Match | None = PackParser.BAD_SEPARATOR_RE.match(stripped)
+                if separator_match is not None:
+                    separator_id: str = separator_match.group(1).strip()
+                    seen.add(separator_id)
+                    unloaded.append({"standard_id": separator_id, "reason": PackParser.UNLOADED_BAD_SEPARATOR})
                 continue
             candidate_id: str = match.group(1).strip()
+            seen.add(candidate_id)
             if not declared_re.match(candidate_id):
                 unloaded.append({"standard_id": candidate_id, "reason": PackParser.UNLOADED_OFF_PATTERN})
             elif not match.group(2).strip():
                 unloaded.append({"standard_id": candidate_id, "reason": PackParser.UNLOADED_NO_TEXT})
+        return unloaded + PackParser.find_ids_outside_bullets(text, seen)
+
+    @staticmethod
+    def find_ids_outside_bullets(text: str, seen: set[str]) -> list[dict[str, str]]:
+        """
+        Find id-bearing lines that are not bullets, such as a numbered list, which get_bullets() never sees.
+
+        :param text: The operating_standards.md text.
+        :param seen: The ids found in bullets, which are not reported again. Each id found here is added to it.
+        :return: One entry per line, with "standard_id" and "reason" keys.
+        """
+        unloaded: list[dict[str, str]] = []
+        for line in text.splitlines():
+            stripped: str = line.strip()
+            if not stripped or stripped.startswith(("#", ">")) or PackParser.BULLET_RE.match(line):
+                continue
+            match: re.Match | None = PackParser.CANDIDATE_RE.match(PackParser.NUMBERED_PREFIX_RE.sub("", stripped))
+            if match is None:
+                continue
+            standard_id: str = match.group(1).strip()
+            # An id that a real bullet defines is a cross-reference in prose, not a second definition.
+            if standard_id not in seen:
+                seen.add(standard_id)
+                unloaded.append({"standard_id": standard_id, "reason": PackParser.UNLOADED_NOT_A_BULLET})
         return unloaded
+
+    @staticmethod
+    def find_unaccounted_lines(text: str) -> list[dict[str, int | str]]:
+        """
+        Find the prose after the first standard, where a rule written without an id is dropped. A preamble before it
+        is expected.
+
+        :param text: The operating_standards.md text.
+        :return: One entry per line, with "line_number" and "text" keys.
+        """
+        unaccounted: list[dict[str, int | str]] = []
+        seen_bullet: bool = False
+        in_bullet: bool = False
+        for line_number, line in enumerate(text.splitlines(), start=1):
+            stripped: str = line.strip()
+            if not stripped or stripped.startswith(("#", ">")):
+                in_bullet = False
+            elif PackParser.BULLET_RE.match(line):
+                seen_bullet = True
+                in_bullet = True
+            # A line straight after a bullet continues it, and parse_standards() reads it as part of the bullet.
+            elif seen_bullet and not in_bullet:
+                unaccounted.append({"line_number": line_number, "text": stripped})
+        return unaccounted
 
     @staticmethod
     def parse_open_variables(text: str) -> list[OpenVariable]:

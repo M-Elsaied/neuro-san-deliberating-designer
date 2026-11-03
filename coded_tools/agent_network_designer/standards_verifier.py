@@ -206,7 +206,7 @@ class StandardsVerifier:
             config: Any = ConfigFactory.parse_string(content)
         except (ConfigException, ParseBaseException, OSError) as exception:
             raise ValueError(
-                f"Could not parse {path}: {exception}. "
+                f"Could not parse {path}: {PackReader.describe_parse_error(exception)}. "
                 f"A network's includes are relative to the repository root, so run this from there."
             ) from exception
 

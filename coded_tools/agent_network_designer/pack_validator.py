@@ -18,6 +18,7 @@ import re
 
 from coded_tools.agent_network_designer.knowledge_pack import KnowledgePack
 from coded_tools.agent_network_designer.pack_manifest import PackManifest
+from coded_tools.agent_network_designer.pack_parser import PackParser
 from coded_tools.agent_network_designer.pack_reader import PackReader
 
 
@@ -35,13 +36,14 @@ class PackValidator:
         List every problem with a pack, errors and warnings together.
 
         :param pack: The pack to check.
-        :return: Manifest warnings, a missing standards or open variables file, then each standard's and each open
-            variable's problems.
+        :return: Manifest warnings, a missing standards or open variables file, prose after the first standard,
+            then each standard's and each open variable's problems.
         """
         return (
             PackValidator.get_manifest_warnings(pack)
             + PackValidator.get_missing_standards_errors(pack)
             + PackValidator.get_missing_variables_warnings(pack)
+            + PackValidator.get_unaccounted_warnings(pack)
             + PackValidator.get_standard_errors(pack)
             + PackValidator.get_variable_warnings(pack)
         )
@@ -67,6 +69,7 @@ class PackValidator:
         return (
             PackValidator.get_manifest_warnings(pack)
             + PackValidator.get_missing_variables_warnings(pack)
+            + PackValidator.get_unaccounted_warnings(pack)
             + PackValidator.get_variable_warnings(pack)
         )
 
@@ -90,14 +93,42 @@ class PackValidator:
     @staticmethod
     def get_missing_standards_errors(pack: KnowledgePack) -> list[str]:
         """
-        Check that the pack's standards file yielded at least one standard.
+        Check that the pack's standards file yielded a standard, and if not say why: an empty file, prose, bullets
+        without ids, or ids in a shape the parser cannot read.
 
         :param pack: The pack to check.
         :return: At most one error.
         """
         if pack.standards:
             return []
-        return [f"{pack.domain_id}: no operating standards found in {PackReader.STANDARDS_FILENAME}."]
+        filename: str = PackReader.STANDARDS_FILENAME
+        text: str = pack.documents.get(filename, "")
+        if not text.strip():
+            return [f"{pack.domain_id}: {filename} is empty or missing."]
+        bullets: int = len(PackParser.get_bullets(text))
+        prose_lines: int = 0
+        for line in text.splitlines():
+            if line.strip() and not line.strip().startswith("#") and not PackParser.BULLET_RE.match(line):
+                prose_lines += 1
+        preamble: str = f"{pack.domain_id}: no operating standards were loaded from {filename}"
+        advice: str = (
+            f"Write each rule as '{PackParser.EXPECTED_STANDARD_SHAPE}', or extract them from the source document "
+            f"you already have."
+        )
+        if re.search(PackManifest.DEFAULT_STANDARD_ID_PATTERN, text) is not None:
+            return [
+                f"{preamble}: ids appear in the file, so these are standards written in a shape the parser cannot "
+                f"read. The errors below name each one. {advice}"
+            ]
+        if bullets:
+            return [
+                f"{preamble}: it has {PackValidator.pluralize(bullets, 'bullet')}, none carrying an id. A rule needs "
+                f"a stable id so it can be traced into the network it is embedded in. {advice}"
+            ]
+        return [
+            f"{preamble}: it has no bullets and {PackValidator.pluralize(prose_lines, 'line')} of prose, so it is a "
+            f"document rather than a standards list. {advice}"
+        ]
 
     @staticmethod
     def get_missing_variables_warnings(pack: KnowledgePack) -> list[str]:
@@ -110,6 +141,23 @@ class PackValidator:
         if pack.open_variables:
             return []
         return [f"{pack.domain_id}: no open variables found in {PackReader.VARIABLES_FILENAME}."]
+
+    @staticmethod
+    def get_unaccounted_warnings(pack: KnowledgePack) -> list[str]:
+        """
+        Name the prose lines after the first standard, as warnings: only the author knows if one is a rule.
+
+        :param pack: The pack to check.
+        :return: One warning per line, in document order.
+        """
+        warnings: list[str] = []
+        for line in pack.unaccounted_lines:
+            warnings.append(
+                f"{pack.domain_id}: {PackReader.STANDARDS_FILENAME} line {line.get('line_number')} follows a "
+                f"standard but was not read as one: {line.get('text')!r}. If it is a rule, write it as "
+                f"'{PackParser.EXPECTED_STANDARD_SHAPE}'."
+            )
+        return warnings
 
     @staticmethod
     def get_standard_errors(pack: KnowledgePack) -> list[str]:
@@ -183,3 +231,14 @@ class PackValidator:
                 if not value.strip():
                     warnings.append(f"{pack.domain_id}: open variable {variable.variable_id} is missing its {label}.")
         return warnings
+
+    @staticmethod
+    def pluralize(count: int, noun: str) -> str:
+        """
+        Write a count with its noun, singular or plural.
+
+        :param count: How many.
+        :param noun: The singular noun.
+        :return: For example "1 bullet" or "7 bullets".
+        """
+        return f"{count} {noun}" if count == 1 else f"{count} {noun}s"

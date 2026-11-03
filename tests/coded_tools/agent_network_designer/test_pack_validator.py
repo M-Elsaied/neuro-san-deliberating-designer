@@ -14,6 +14,8 @@
 #
 # END COPYRIGHT
 
+import tempfile
+from pathlib import Path
 from unittest import TestCase
 
 from coded_tools.agent_network_designer.knowledge_pack import KnowledgePack
@@ -42,12 +44,39 @@ class TestPackValidator(TestCase):
                 self.assertEqual([], PackValidator.get_errors(pack))
                 self.assertEqual([], PackValidator.get_warnings(pack))
 
-    def test_a_pack_without_standards_is_an_error(self) -> None:
-        """
-        A pack whose standards file parsed to nothing has nothing to deliver.
-        """
-        expected: str = "demo: no operating standards found in operating_standards.md."
-        self.assertEqual([expected], PackValidator.get_errors(PackFixtures.build_pack([])))
+    def test_a_pack_without_standards_is_an_error_that_says_why(self) -> None:
+        """No standards is an error that names what was written instead: nothing, prose, bare bullets, or bad ids."""
+        cases: dict[str, str] = {
+            "": "demo: operating_standards.md is empty or missing.",
+            "# SOP\n\nEvery change needs a record.\n": "it has no bullets and 1 line of prose, so it is a document",
+            "- Never deploy on a Friday.\n- Back up first.\n": "it has 2 bullets, none carrying an id.",
+            "1. ABC-01: Never deploy.\n": "ids appear in the file, so these are standards written in a shape",
+        }
+        for text, expected in cases.items():
+            with self.subTest(text=text):
+                pack: KnowledgePack = KnowledgePack(
+                    manifest=PackFixtures.MANIFEST, documents={PackReader.STANDARDS_FILENAME: text}
+                )
+                error: str = PackValidator.get_missing_standards_errors(pack)[0]
+                self.assertIn(expected, error)
+                self.assertTrue(not text or error.endswith("extract them from the source document you already have."))
+
+    def test_prose_after_a_standard_is_only_a_warning(self) -> None:
+        """Only the author can tell a dropped rule from a closing note, so it must not fail verification."""
+        with tempfile.TemporaryDirectory() as root:
+            PackFixtures.write_pack(
+                Path(root),
+                "mixed",
+                "- ABC-01: Never deploy on a Friday.\n\nAll changes need the CAB.\n",
+                '{ version = "1.0"\n standard_id_pattern = "ABC-\\\\d{2}" }',
+            )
+            pack: KnowledgePack = PackReader.load_pack("mixed", root)
+        self.assertEqual([], PackValidator.get_errors(pack))
+        expected: str = (
+            "mixed: operating_standards.md line 3 follows a standard but was not read as one: "
+            "'All changes need the CAB.'. If it is a rule, write it as '- <ID>: <the rule, word for word>'."
+        )
+        self.assertEqual([expected], PackValidator.get_warnings(pack))
 
     def test_a_duplicate_standard_id_is_an_error(self) -> None:
         """
@@ -141,7 +170,7 @@ class TestPackValidator(TestCase):
         pack: KnowledgePack = PackFixtures.build_pack([], PackManifest("demo"), variables=())
         expected: list[str] = [
             "demo: pack.hocon declares no version.",
-            "demo: no operating standards found in operating_standards.md.",
+            "demo: operating_standards.md is empty or missing.",
             "demo: no open variables found in open_variables.md.",
         ]
         self.assertEqual(expected, PackValidator.get_problems(pack))

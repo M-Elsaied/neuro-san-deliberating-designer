@@ -129,6 +129,7 @@ class PackReader:
             open_variables=PackParser.parse_open_variables(documents.get(PackReader.VARIABLES_FILENAME, "")),
             documents=documents,
             unloaded_standards=PackParser.find_unloaded_standards(standards_text, manifest.standard_id_pattern),
+            unaccounted_lines=PackParser.find_unaccounted_lines(standards_text),
         )
 
     @staticmethod
@@ -169,7 +170,9 @@ class PackReader:
             config: Any = ConfigFactory.parse_file(str(manifest_path))
             raw_roles: dict[Any, Any] = dict(config.get("roles", {}) or {})
         except (ConfigException, ParseBaseException, TypeError, ValueError) as exception:
-            raise ValueError(f"Could not parse {manifest_path}: {exception}") from exception
+            raise ValueError(
+                f"Could not parse {manifest_path}: {PackReader.describe_parse_error(exception)}"
+            ) from exception
         roles: dict[str, str] = {}
         for standard_id, role in raw_roles.items():
             roles[str(standard_id)] = str(role).strip().lower()
@@ -236,6 +239,19 @@ class PackReader:
         except (PyPdfError, OSError) as exception:
             logger.warning("Could not read PDF %s: %s", path, exception)
             return f"ERROR: Error reading PDF {path}: {exception}"
+
+    @staticmethod
+    def describe_parse_error(exception: Exception) -> str:
+        """
+        Say why a HOCON file did not parse. A syntax error is given by its position, since its own message spells
+        out the parser's whole grammar.
+
+        :param exception: What parsing raised.
+        :return: The line and column of a syntax error, otherwise the exception's own message.
+        """
+        if isinstance(exception, ParseBaseException):
+            return f"syntax error at line {exception.lineno}, column {exception.col}"
+        return str(exception)
 
     @staticmethod
     def get_text(config: Any, key: str, default: str = "") -> str:

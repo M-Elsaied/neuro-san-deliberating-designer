@@ -41,6 +41,8 @@ class KnowledgePack:
     # Bullets that read as a standard but were not loaded, each with "standard_id" and "reason" keys, so
     # validation can report them.
     unloaded_standards: list[dict[str, str]] = field(default_factory=list)
+    # Prose after the first standard, each with "line_number" and "text" keys: a dropped rule or a closing note.
+    unaccounted_lines: list[dict[str, int | str]] = field(default_factory=list)
 
     @property
     def domain_id(self) -> str:

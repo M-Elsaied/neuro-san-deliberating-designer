@@ -259,9 +259,13 @@ class TestStandardsVerifier(TestCase):
                 "list_root.hocon": """[{ "name": "a" }]""",
                 "scalar_tools.hocon": """{ "tools": [1, 2] }""",
             }
+            malformed_path: Path = Path(temporary) / "unclosed.hocon"
+            malformed_path.write_text("""{ "tools": [ """, encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, r"unclosed\.hocon: syntax error at line 1, column \d+\. "):
+                StandardsVerifier.read_network_definition(malformed_path)
             for file_name, content in malformed.items():
                 with self.subTest(file_name=file_name):
-                    malformed_path: Path = Path(temporary) / file_name
+                    malformed_path = Path(temporary) / file_name
                     malformed_path.write_text(content, encoding="utf-8")
                     with self.assertRaises(ValueError):
                         StandardsVerifier.read_network_definition(malformed_path)

@@ -220,7 +220,7 @@ class TestPackReader(TestCase):
         """
         PackFixtures.write_pack(self.root, "broken", "- ABC-01: A rule.\n", "{ version = ")
         PackFixtures.write_pack(self.root, "fine", "- ABC-01: A rule.\n")
-        with self.assertRaisesRegex(ValueError, "Could not parse"):
+        with self.assertRaisesRegex(ValueError, r"Could not parse .*pack\.hocon: syntax error at line 1, column \d+$"):
             PackReader.load_pack("broken", self.root)
         with self.assertLogs("coded_tools.agent_network_designer.pack_reader", level="WARNING") as logs:
             catalog: list[KnowledgePack] = PackReader.load_catalog(self.root)

@@ -67,6 +67,35 @@ class TestPackParser(TestCase):
         ]
         self.assertEqual(expected, PackParser.find_unloaded_standards(text, r"ABC-\d{2}"))
 
+    def test_a_mis_shaped_standard_is_reported_as_unloaded(self) -> None:
+        """A wrong separator, a numbered list or a bare id line is reported; a cross-reference in prose is not."""
+        cases: dict[str, list[dict[str, str]]] = {
+            "- ABC-01 \u2014 Never deploy on a Friday.\n": [
+                {"standard_id": "ABC-01", "reason": PackParser.UNLOADED_BAD_SEPARATOR}
+            ],
+            "1. ABC-01: Never deploy.\n2) ABC-02: Back up.\nABC-03: Bare.\n": [
+                {"standard_id": "ABC-01", "reason": PackParser.UNLOADED_NOT_A_BULLET},
+                {"standard_id": "ABC-02", "reason": PackParser.UNLOADED_NOT_A_BULLET},
+                {"standard_id": "ABC-03", "reason": PackParser.UNLOADED_NOT_A_BULLET},
+            ],
+            "- ABC-01: Never deploy.\n\nABC-01: the rule above.\n> ABC-02: quoted.\n": [],
+        }
+        for text, expected in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual(expected, PackParser.find_unloaded_standards(text, r"ABC-\d{2}"))
+
+    def test_prose_after_the_first_standard_is_unaccounted(self) -> None:
+        """A preamble and a bullet's own continuation are expected; later prose may be a dropped rule."""
+        text: str = (
+            "Preamble.\n\n- ABC-01: Never deploy\n  on a Friday.\n- ABC-02: Back up.\n\n"
+            "All changes need the CAB.\n# Notes\nA closing note.\n"
+        )
+        expected: list[dict[str, int | str]] = [
+            {"line_number": 7, "text": "All changes need the CAB."},
+            {"line_number": 9, "text": "A closing note."},
+        ]
+        self.assertEqual(expected, PackParser.find_unaccounted_lines(text))
+
     def test_an_invalid_id_pattern_falls_back_to_the_default(self) -> None:
         """
         A typo in the pattern is reported by PackValidator; parsing still loads the standards.

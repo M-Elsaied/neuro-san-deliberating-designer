@@ -43,7 +43,8 @@ export AGENT_NETWORK_DESIGNER_KNOWDOCS=/srv/agent-knowledge/packs
 ## `operating_standards.md`
 
 One bullet per standard: an id, a colon, then the rule. Wrap freely across lines — continuations are
-re-joined. Prose and headings between bullets are ignored, so you can explain the pack at the top.
+re-joined. Prose and headings before the first standard are ignored, so you can explain the pack at the
+top. Prose after it is reported as a warning, because it may be a rule written without an id.
 
 ```markdown
 # Operating standards - Oracle database patching
@@ -150,11 +151,12 @@ Pack problems come in two severities, and the line between them decides whether 
 
 - **Errors** mean the pack cannot be trusted to have delivered its standards — an id outside the
   declared pattern, a standard with no text, a duplicate id, a role pointing at a standard that no
-  longer exists. Any of these and a standard is missing or ambiguous *before the build even starts*,
-  so however carefully the network was assembled it cannot carry the pack. These fail verification.
+  longer exists, or a line with an id that is not written as a bullet or has no colon after the id. Any of
+  these and a standard is missing or ambiguous *before the build even starts*, so however carefully the
+  network was assembled it cannot carry the pack. These fail verification.
 - **Warnings** mean the pack is under-specified but its standards are intact — no `pack.hocon`, no
-  `version`, an open variable missing its `why`. Reported, never blocking. This is also what keeps a
-  pack written before manifests existed working.
+  `version`, an open variable missing its `why`, prose after the first standard. Reported, never
+  blocking. This is also what keeps a pack written before manifests existed working.
 
 ## Provenance in the generated network
 
