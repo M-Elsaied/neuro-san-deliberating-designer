@@ -26,7 +26,7 @@ from langgraph.runtime import Runtime
 from neuro_san.interfaces.reservationist import Reservationist
 from neuro_san.internals.validation.network.unreachable_nodes_network_validator import UnreachableNodesNetworkValidator
 
-from coded_tools.agent_network_designer.knowledge_pack import PACK_PROVENANCE
+from coded_tools.agent_network_designer.knowledge_pack import KnowledgePack
 from coded_tools.agent_network_editor.and_logger import AndLogger
 from coded_tools.agent_network_editor.connectivity_dictionary_converter import ConnectivityDictionaryConverter
 from coded_tools.agent_network_editor.constants import AGENT_NETWORK_DEFINITION
@@ -277,7 +277,7 @@ class AgentNetworkPersistenceMiddleware(AgentMiddleware):
 
         # Provenance of the curated knowledge pack this network was designed from, recorded by
         # ExtractDocs. Empty for networks built without a pack, in which case nothing is stamped.
-        pack_provenance: str = self.sly_data.get(PACK_PROVENANCE) or ""
+        pack_provenance: str = self.sly_data.get(KnowledgePack.PROVENANCE_KEY) or ""
 
         # Always assemble and store HOCON content for client consumption.
         persisted_content: str = await HoconAgentNetworkAssembler(DEMO_MODE).assemble_agent_network(

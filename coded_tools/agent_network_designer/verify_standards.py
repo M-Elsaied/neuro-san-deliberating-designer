@@ -14,126 +14,86 @@
 #
 # END COPYRIGHT
 
-"""
-CodedTool wrapper around the standards verifier.
-
-The checks themselves live in standards_verifier, which imports nothing from neuro-san so the
-same verification can run in CI, in a pre-commit hook, or over a directory of already-generated
-networks. This module is only the adapter that lets the designer call it mid-build.
-"""
-
+import asyncio
 import logging
 from typing import Any
 
 from neuro_san.interfaces.coded_tool import CodedTool
 
-from coded_tools.agent_network_designer.knowledge_pack import PACK_PROVENANCE
 from coded_tools.agent_network_designer.knowledge_pack import KnowledgePack
-from coded_tools.agent_network_designer.knowledge_pack import discover_domains
-from coded_tools.agent_network_designer.knowledge_pack import load_pack
-from coded_tools.agent_network_designer.standards_verifier import VerificationResult
-from coded_tools.agent_network_designer.standards_verifier import render_report
-from coded_tools.agent_network_designer.standards_verifier import verify
+from coded_tools.agent_network_designer.pack_catalog import PackCatalog
+from coded_tools.agent_network_designer.pack_reader import PackReader
+from coded_tools.agent_network_designer.standards_verifier import StandardsVerifier
+from coded_tools.agent_network_designer.verification_report import VerificationReport
+from coded_tools.agent_network_designer.verification_result import VerificationResult
+from coded_tools.agent_network_editor.constants import AGENT_NETWORK_DEFINITION
 
 logger = logging.getLogger(__name__)
-
-# sly_data key holding the network under construction.
-AGENT_NETWORK_DEFINITION: str = "agent_network_definition"
 
 
 class VerifyStandards(CodedTool):
     """
-    CodedTool that verifies a generated agent network against its domain's knowledge pack.
-
-    Reads the network from sly_data, loads the pack, and returns a COMPUTED coverage report -
-    replacing a table the language model would otherwise write about its own work.
-
-    Advisory by default: a network covering five of six standards with one flagged is more useful
-    than an exception, and an honest partial report is the point. Pass strict=true to turn a
-    failed verification into an error the designer is obliged to surface.
+    CodedTool that verifies the network under construction against its domain's knowledge pack and returns the
+    computed coverage report. A failed verification is reported, not raised, so the designer can state it.
     """
 
     def invoke(self, args: dict[str, Any], sly_data: dict[str, Any]) -> dict[str, Any] | str:
         """
-        :param args: An argument dictionary with the following keys:
-            - "app_name" (str): the curated domain the network was designed for.
-            - "strict" (bool, optional): when true, a failed verification is returned as an
-              error string rather than a report. Defaults to false.
+        Verify the network under construction and return the computed coverage report.
 
-        :param sly_data: A dictionary whose keys are defined by the agent hierarchy, but whose
-            values are meant to be kept out of the chat stream.
-
-            Keys expected for this implementation are:
-                "agent_network_definition": the network under construction.
-
-        :return:
-            If successful:
-                A dictionary containing the verification outcome with the keys:
-                - "ok" (bool): whether every check passed.
-                - "domain" (str): the domain verified against.
-                - "provenance" (str): the pack's identity, version and owner.
-                - "report" (str): a markdown coverage table, ready to print verbatim.
-                - "problems" (list): every failure, as human-readable lines.
-                - "pack_errors" (list): pack faults that block verification.
-                - "pack_warnings" (list): pack faults that do not block verification.
-            Otherwise:
-                A text string error message in the format:
-                "Error: <error message>"
+        :param args: "app_name", the domain the network was designed for, and optionally "strict", which turns a
+            failed verification into an error string.
+        :param sly_data: "agent_network_definition", the network to verify. It is never taken from args, since
+            the model being audited must not supply the artifact under audit. The pack's provenance is written
+            under KnowledgePack.PROVENANCE_KEY, because this runs in the same turn as persistence.
+        :return: "ok", "domain", "provenance", "report" (markdown to print verbatim), "problems",
+            "pack_errors" and "pack_warnings". Otherwise an "Error: ..." string, which in strict mode carries
+            the report.
         """
-        available: str = ", ".join(discover_domains()) or "none"
-
         domain_id: str | None = args.get("app_name")
         if not domain_id:
-            return f"Error: No domain provided to verify against. Available curated domains: {available}"
+            return (
+                f"Error: No domain provided to verify against. "
+                f"Available curated domains: {PackReader.describe_domains()}"
+            )
 
-        # The network under audit is read ONLY from sly_data, which the middleware maintains.
-        # It is deliberately not accepted from args: args is what the model sends, and letting the
-        # audited party hand the auditor the artifact to audit would reinstate exactly the
-        # self-certification this tool exists to remove.
         network_definition: Any = (sly_data or {}).get(AGENT_NETWORK_DEFINITION)
         if not isinstance(network_definition, dict) or not network_definition:
             return (
                 "Error: No agent network definition is available to verify. "
                 "Verification runs after the network has been built."
             )
-
         try:
-            pack: KnowledgePack = load_pack(domain_id)
-        except (FileNotFoundError, OSError) as exception:
-            return f"Error: {exception}. Available curated domains: {available}"
+            pack: KnowledgePack = PackCatalog.load_pack(domain_id)
+        except FileNotFoundError as exception:
+            return f"Error: {exception}. Available curated domains: {PackReader.describe_domains()}"
+        except (OSError, ValueError) as exception:
+            logger.warning("Could not read knowledge pack %s: %s", domain_id, exception)
+            return f"""Error: The knowledge pack for domain "{domain_id}" could not be read: {exception}"""
 
-        result: VerificationResult = verify(pack, network_definition)
-        report: str = render_report(result)
+        result: VerificationResult = StandardsVerifier.verify(pack, network_definition)
+        report: str = VerificationReport.render(result)
         logger.debug("Standards verification for %s: ok=%s", domain_id, result.ok)
-
-        # Record the provenance here as well as in ExtractDocs, and the reason is the sly_data
-        # lifecycle rather than belt-and-braces. The session dict is rebuilt from the client's
-        # payload on every turn (DataDrivenChatSession), so a key written during the interview
-        # survives to the build turn only if allow.to_upstream lets it out and the client sends it
-        # back. This tool runs in the SAME turn as persistence, so writing it here guarantees the
-        # generated artifact can state what it was built from even if the round trip is lossy.
         if sly_data is not None:
-            sly_data[PACK_PROVENANCE] = pack.manifest.provenance()
-
+            sly_data[KnowledgePack.PROVENANCE_KEY] = result.provenance
         if args.get("strict") and not result.ok:
             return "Error: Standards verification failed.\n\n" + report
-
         return {
             "ok": result.ok,
             "domain": result.domain_id,
             "provenance": result.provenance,
             "report": report,
-            "problems": result.problems(),
+            "problems": VerificationReport.get_problems(result),
             "pack_errors": result.pack_errors,
             "pack_warnings": result.pack_warnings,
         }
 
     async def async_invoke(self, args: dict[str, Any], sly_data: dict[str, Any]) -> dict[str, Any] | str:
         """
-        Delegates to the synchronous implementation: verification is CPU-bound string work.
+        Runs invoke() in a worker thread, since it reads the pack from disk.
 
         :param args: See invoke().
         :param sly_data: See invoke().
         :return: See invoke().
         """
-        return self.invoke(args, sly_data)
+        return await asyncio.to_thread(self.invoke, args, sly_data)
