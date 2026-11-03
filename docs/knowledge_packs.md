@@ -38,12 +38,16 @@ To serve your own packs without touching this repository:
 export AGENT_NETWORK_DESIGNER_KNOWDOCS=/srv/agent-knowledge/packs
 ```
 
+The designer's tools read the packs once per process, and pick up an edited, added or removed pack
+without a restart. An explicit path, such as `--knowdocs`, is read directly and never cached.
+
 ---
 
 ## `operating_standards.md`
 
 One bullet per standard: an id, a colon, then the rule. Wrap freely across lines — continuations are
-re-joined. Prose and headings between bullets are ignored, so you can explain the pack at the top.
+re-joined. Prose and headings before the first standard are ignored, so you can explain the pack at the
+top. Prose after it is reported as a warning, because it may be a rule written without an id.
 
 ```markdown
 # Operating standards - Oracle database patching
@@ -73,6 +77,10 @@ The **why** matters more than it looks. It is what lets the designer justify a q
 itself understand — it has no idea what Data Guard is, and does not need to. A pack that omits the
 why-clause is reported by validation.
 
+The **examples** become the numbered options the user picks from, verbatim and in your order, so write them
+as distinct answers a requester could pick: an answer that is a shortening of two of them is sent back as
+ambiguous. The first bullet is `Q1` for the whole session.
+
 ## `pack.hocon`
 
 ```hocon
@@ -98,11 +106,13 @@ why-clause is reported by validation.
 
 What each field is for:
 
-- **`version`, `owner`, `approved_by`, `effective_date`, `source`** — stamped into the generated
+- **`title`, `version`, `owner`, `approved_by`, `effective_date`** — stamped into the generated
   network, so an artifact states what it was built from and who stands behind it. A network of
   unknown ancestry is hard to defend in an audit.
+- **`summary`** — what `ListDomains` shows the designer when it matches a request to a domain.
+- **`source`** — free text for people reading the pack. The designer does not read it.
 - **`standard_id_pattern`** — your ids, not ours. `SOP-4.2.1`, `CTRL-0093`, `std-001`: whatever your
-  organisation already numbers its standards with. An id that reads like a standard but falls outside
+  organization already numbers its standards with. An id that reads like a standard but falls outside
   this pattern is **not loaded**, and validation reports it rather than letting the rule disappear.
 - **`roles`** — temporal role drives topology. Declaring it here takes the decision away from the
   language model and makes the resulting shape checkable.
@@ -142,17 +152,23 @@ work.
 Failures are reported, not raised — a network covering five of six standards with one flagged is more
 useful than an exception. Pass `strict` to make a failure an error instead.
 
+**What blocks saving a network.** A standard that was paraphrased, or an id the pack does not define, is
+sent back to be corrected, and if it still cannot be reproduced within the retry budget the network is
+not written. Neither is a judgment call. Missing coverage, ambiguous ownership and topology are logged
+but never block. Set `AGENT_NETWORK_DESIGNER_ENFORCE_STANDARDS=false` to make saving advisory again.
+
 ### Errors and warnings
 
 Pack problems come in two severities, and the line between them decides whether verification fails:
 
 - **Errors** mean the pack cannot be trusted to have delivered its standards — an id outside the
   declared pattern, a standard with no text, a duplicate id, a role pointing at a standard that no
-  longer exists. Any of these and a standard is missing or ambiguous *before the build even starts*,
-  so however carefully the network was assembled it cannot carry the pack. These fail verification.
+  longer exists, or a line with an id that is not written as a bullet or has no colon after the id. Any of
+  these and a standard is missing or ambiguous *before the build even starts*, so however carefully the
+  network was assembled it cannot carry the pack. These fail verification.
 - **Warnings** mean the pack is under-specified but its standards are intact — no `pack.hocon`, no
-  `version`, an open variable missing its `why`. Reported, never blocking. This is also what keeps a
-  pack written before manifests existed working.
+  `version`, an open variable missing its `why`, prose after the first standard. Reported, never
+  blocking. This is also what keeps a pack written before manifests existed working.
 
 ## Provenance in the generated network
 
@@ -163,7 +179,7 @@ Once a network is built from a pack, the pack's provenance line is written into 
     "metadata": {
         "sample_queries": [ ... ],
         "date_created": "2026-08-21T09:14:02+00:00",
-        "knowledge_pack": "Oracle database patching, v1.0.0, owned by Database Engineering"
+        "knowledge_pack": "Oracle database patching, v1.0.0, owned by Database Engineering, approved by Change Advisory Board, effective 2026-06-01"
     },
 ```
 
@@ -185,20 +201,40 @@ Exit code `0` if the network verifies clean, `1` if it does not, `2` on a usage 
 
 ---
 
+## Auditing the networks already generated
+
+A pack can change after a network is built from it. The audit checks a directory of generated networks
+against the packs as they are now, matching each to its pack by the ids it embeds, and exits `1` when one
+is `stale` (built from an older version), `drifted` (a standard's text no longer matches, whatever the
+version says) or belongs to an `unknown pack`. A network with no recorded version is reported as
+`unstamped` but not flagged. Add `--standard ODB-03` or `--pack <domain>` to list what implements either.
+
+```bash
+python -m coded_tools.agent_network_designer.network_audit registries/generated/
+```
+
+---
+
 ## Checklist for a new pack
 
 1. `mkdir <knowdocs root>/<your_domain>`
 2. Write `operating_standards.md` — short, invariant, each rule with a stable id.
 3. Write `open_variables.md` — only what the requester alone can answer, each with its why.
 4. Write `pack.hocon` — version and owner at minimum, plus your id pattern if it is not `ABC-01`.
-5. Confirm it loads and validates:
+5. Check it:
 
-   ```python
-   from coded_tools.agent_network_designer.knowledge_pack import load_pack
-   print(load_pack("your_domain").validate())   # [] means clean
+   ```bash
+   python -m coded_tools.agent_network_designer.pack_authoring validate --domain your_domain
    ```
 
-6. Ask the designer to build something in your domain, and read the verified coverage table.
+   Exit `0` means usable. Each problem is reported with what to do about it. Add `--strict` if an
+   incomplete `pack.hocon` should also count as a failure.
+6. Ask the designer to build something in your domain, and read the verified coverage table. It lists
+   any pack errors and warnings under the table.
+
+To check every pack at once, run `validate --all`. It prints one line per pack — `OK`, `OK*` for usable
+but under-specified, `PROBLEM` for unusable or unreadable — then the detail for anything that needs
+attention. `make test` runs it, so a malformed pack under the knowdocs root fails the build.
 
 No step edits Python or the designer's prompt. If one did, this would be an example rather than an
 extension point.
